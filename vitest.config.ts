@@ -30,6 +30,7 @@ const pluginSdkSubpaths = [
   "google-gemini-cli-auth",
   "googlechat",
   "irc",
+  "intaris",
   "llm-task",
   "lobster",
   "matrix",
