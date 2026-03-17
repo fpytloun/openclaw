@@ -7,6 +7,7 @@
  *
  * Flow:
  * 1. session_start: Creates an Intaris session via POST /api/v1/intention
+ * 1b. before_reset: Closes the Intaris session when user sends /new or /reset
  * 2. before_agent_start: Forwards user prompt as reasoning context
  * 3. before_tool_call: Evaluates every tool call via POST /api/v1/evaluate
  *    - approve: tool executes normally
@@ -230,8 +231,9 @@ const intarisPlugin = {
     ): Promise<string | null> {
       if (state.intarisSessionId) return state.intarisSessionId;
 
-      // Deterministic Intaris session ID from the OpenClaw session key
-      const intarisSessionId = `oc-${sessionKey}`;
+      // Unique Intaris session ID per session instance. Each gateway restart
+      // or /new / /reset gets a fresh session — no resume-on-reconnect.
+      const intarisSessionId = `oc-${crypto.randomUUID()}`;
       const intention = buildIntention(ctx);
       const details = buildDetails(ctx);
       const policy = buildPolicy(cfg.allowPaths);
@@ -366,6 +368,20 @@ const intarisPlugin = {
       const state = getOrCreateState(sessionKey);
       // Pre-create the Intaris session (best-effort, non-blocking)
       ensureSession(sessionKey, state, ctx).catch(() => {});
+    });
+
+    // -- before_reset: User sent /new or /reset — close current Intaris session
+    api.on("before_reset", async (_event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      const state = sessions.get(sessionKey);
+      if (!state) return;
+
+      // Signal completion to Intaris and wipe local state so the
+      // subsequent session_start creates a fresh Intaris session.
+      signalCompletion(state, sessionKey, ctx);
+      sessions.delete(sessionKey);
     });
 
     // -- before_agent_start: Forward user prompt as reasoning context ----------
