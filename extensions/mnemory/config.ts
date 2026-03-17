@@ -11,6 +11,8 @@ export type MnemoryConfig = {
   url: string;
   /** Bearer token for mnemory authentication. */
   apiKey: string;
+  /** User ID sent as X-User-Id header. Required when the API key is a wildcard or auth is disabled. */
+  userId: string;
   /** Automatically inject relevant memories into context. Default: true. */
   autoRecall: boolean;
   /** Automatically extract and store memories from conversations. Default: true. */
@@ -70,6 +72,17 @@ export const mnemoryConfigSchema = {
       }
     }
 
+    // userId — optional, supports ${ENV_VAR}, falls back to MNEMORY_USER_ID
+    let userId = "";
+    if (typeof raw.userId === "string" && raw.userId.length > 0) {
+      userId = resolveEnvVar(raw.userId);
+    } else {
+      const envUserId = process.env.MNEMORY_USER_ID;
+      if (envUserId) {
+        userId = envUserId;
+      }
+    }
+
     // autoRecall — default true
     const autoRecall = typeof raw.autoRecall === "boolean" ? raw.autoRecall : true;
 
@@ -96,6 +109,7 @@ export const mnemoryConfigSchema = {
     const knownKeys = new Set([
       "url",
       "apiKey",
+      "userId",
       "autoRecall",
       "autoCapture",
       "scoreThreshold",
@@ -111,6 +125,7 @@ export const mnemoryConfigSchema = {
     return {
       url: url as string,
       apiKey,
+      userId,
       autoRecall,
       autoCapture,
       scoreThreshold,
