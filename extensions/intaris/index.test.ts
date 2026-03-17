@@ -46,6 +46,7 @@ describe("intaris plugin", () => {
     intarisPlugin.register(api as any);
 
     expect(api.on).toHaveBeenCalledWith("session_start", expect.any(Function));
+    expect(api.on).toHaveBeenCalledWith("before_reset", expect.any(Function));
     expect(api.on).toHaveBeenCalledWith("before_agent_start", expect.any(Function));
     expect(api.on).toHaveBeenCalledWith("before_tool_call", expect.any(Function));
     expect(api.on).toHaveBeenCalledWith("after_tool_call", expect.any(Function));
@@ -129,7 +130,9 @@ describe("intaris plugin", () => {
       expect(opts?.method).toBe("POST");
 
       const body = JSON.parse(opts?.body as string);
-      expect(body.session_id).toBe("oc-main");
+      expect(body.session_id).toMatch(
+        /^oc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
       expect(body.intention).toContain("OpenClaw");
 
       // Verify X-Agent-Id header comes from ctx.agentId
@@ -154,6 +157,124 @@ describe("intaris plugin", () => {
           expect.stringContaining("already exists, reusing"),
         );
       });
+    });
+  });
+
+  describe("before_reset hook", () => {
+    beforeEach(() => {
+      intarisPlugin.register(api as any);
+    });
+
+    it("signals completion and removes session state on reset", async () => {
+      // Setup: create a session via before_tool_call (which awaits ensureSession,
+      // unlike session_start which fires it as fire-and-forget).
+      vi.mocked(globalThis.fetch)
+        .mockResolvedValueOnce(mockResponse({ status: "active" })) // createIntention
+        .mockResolvedValueOnce(
+          mockResponse({
+            call_id: "c-r1",
+            decision: "approve",
+            reasoning: "ok",
+            risk: "low",
+            path: "fast",
+            latency_ms: 1,
+          }),
+        ); // evaluate
+
+      await hooks.before_tool_call(
+        { toolName: "bash", params: { command: "ls" }, toolCallId: "tc-r1" },
+        { agentId: "default", sessionKey: "sk-r1", toolName: "bash" },
+      );
+
+      // Clear call history so we only see completion calls
+      vi.mocked(globalThis.fetch).mockClear();
+      vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse({}, 200));
+
+      // Fire before_reset
+      await hooks.before_reset({}, { agentId: "default", sessionKey: "sk-r1" });
+
+      // signalCompletion fires PATCH /status and POST /agent-summary as
+      // fire-and-forget promises, so wait for them to land.
+      await vi.waitFor(() => {
+        expect(vi.mocked(globalThis.fetch).mock.calls.length).toBeGreaterThanOrEqual(2);
+      });
+
+      const urls = vi.mocked(globalThis.fetch).mock.calls.map(([url]) => String(url));
+      expect(urls.some((u) => u.includes("/status"))).toBe(true);
+      expect(urls.some((u) => u.includes("/agent-summary"))).toBe(true);
+    });
+
+    it("does nothing when sessionKey is absent", async () => {
+      const fetchBefore = vi.mocked(globalThis.fetch).mock.calls.length;
+      await hooks.before_reset({}, {});
+      expect(vi.mocked(globalThis.fetch).mock.calls.length).toBe(fetchBefore);
+    });
+
+    it("does nothing when no state exists for the session key", async () => {
+      const fetchBefore = vi.mocked(globalThis.fetch).mock.calls.length;
+      await hooks.before_reset({}, { sessionKey: "nonexistent" });
+      expect(vi.mocked(globalThis.fetch).mock.calls.length).toBe(fetchBefore);
+    });
+
+    it("after reset, session_start creates a new distinct Intaris session ID", async () => {
+      // First session — use before_tool_call to ensure ensureSession is awaited
+      vi.mocked(globalThis.fetch)
+        .mockResolvedValueOnce(mockResponse({ status: "active" })) // createIntention
+        .mockResolvedValueOnce(
+          mockResponse({
+            call_id: "c-r2",
+            decision: "approve",
+            reasoning: "ok",
+            risk: "low",
+            path: "fast",
+            latency_ms: 1,
+          }),
+        ); // evaluate
+
+      await hooks.before_tool_call(
+        { toolName: "bash", params: { command: "ls" }, toolCallId: "tc-r2" },
+        { agentId: "default", sessionKey: "sk-r2", toolName: "bash" },
+      );
+
+      // Capture the first session ID from the createIntention call
+      const intentionCalls1 = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.filter(([url]) => String(url).includes("/intention"));
+      expect(intentionCalls1.length).toBe(1);
+      const firstId = JSON.parse(intentionCalls1[0][1]?.body as string).session_id;
+
+      // Reset
+      vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse({}, 200));
+      await hooks.before_reset({}, { agentId: "default", sessionKey: "sk-r2" });
+
+      // New session after reset — again use before_tool_call
+      vi.mocked(globalThis.fetch)
+        .mockResolvedValueOnce(mockResponse({ status: "active" })) // createIntention
+        .mockResolvedValueOnce(
+          mockResponse({
+            call_id: "c-r3",
+            decision: "approve",
+            reasoning: "ok",
+            risk: "low",
+            path: "fast",
+            latency_ms: 1,
+          }),
+        ); // evaluate
+
+      await hooks.before_tool_call(
+        { toolName: "bash", params: { command: "pwd" }, toolCallId: "tc-r3" },
+        { agentId: "default", sessionKey: "sk-r2", toolName: "bash" },
+      );
+
+      const intentionCalls2 = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.filter(([url]) => String(url).includes("/intention"));
+      // Should have 2 intention calls total (first session + after reset)
+      expect(intentionCalls2.length).toBe(2);
+      const secondId = JSON.parse(intentionCalls2[1][1]?.body as string).session_id;
+
+      expect(secondId).not.toBe(firstId);
+      expect(secondId).toMatch(/^oc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     });
   });
 
