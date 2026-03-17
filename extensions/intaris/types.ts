@@ -84,4 +84,6 @@ export interface SessionState {
   intentionUpdated: boolean;
   isIdle: boolean;
   recordingBuffer: RecordingEvent[];
+  /** Last assistant response text, consumed as context for the next reasoning call */
+  lastAssistantText: string;
 }

@@ -97,6 +97,7 @@ function createSessionState(): SessionState {
     intentionUpdated: false,
     isIdle: false,
     recordingBuffer: [],
+    lastAssistantText: "",
   };
 }
 
@@ -396,9 +397,20 @@ const intarisPlugin = {
         client.updateStatus(stateRef.intarisSessionId!, "active", ctx.agentId).catch(() => {});
       }
 
+      // Consume last assistant text as context for intention generation.
+      // This helps the intention generator interpret short user replies like
+      // "ok, do it" by providing the assistant's last response as context.
+      const assistantContext = stateRef.lastAssistantText || undefined;
+      stateRef.lastAssistantText = "";
+
       // Forward user message as reasoning context
       client
-        .submitReasoning(stateRef.intarisSessionId!, `User message: ${content}`, ctx.agentId)
+        .submitReasoning(
+          stateRef.intarisSessionId!,
+          `User message: ${content}`,
+          ctx.agentId,
+          assistantContext,
+        )
         .catch(() => {});
 
       // Signal that an intention update is in flight. The next
@@ -711,6 +723,23 @@ const intarisPlugin = {
           durationMs: event.durationMs,
         },
       });
+    });
+
+    // -- llm_output: Capture last assistant text for intention context ---------
+    api.on("llm_output", async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      const state = sessions.get(sessionKey);
+      if (!state) return;
+
+      // Store the last assistant text so it can be sent as context with the
+      // next reasoning call, helping the intention generator interpret short
+      // user replies like "ok, do it".
+      const texts = event.assistantTexts;
+      if (texts && texts.length > 0) {
+        state.lastAssistantText = texts[texts.length - 1];
+      }
     });
 
     // -- agent_end: Send checkpoint if interval reached -----------------------

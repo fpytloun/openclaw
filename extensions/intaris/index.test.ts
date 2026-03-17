@@ -49,6 +49,7 @@ describe("intaris plugin", () => {
     expect(api.on).toHaveBeenCalledWith("before_agent_start", expect.any(Function));
     expect(api.on).toHaveBeenCalledWith("before_tool_call", expect.any(Function));
     expect(api.on).toHaveBeenCalledWith("after_tool_call", expect.any(Function));
+    expect(api.on).toHaveBeenCalledWith("llm_output", expect.any(Function));
     expect(api.on).toHaveBeenCalledWith("agent_end", expect.any(Function));
     expect(api.on).toHaveBeenCalledWith("session_end", expect.any(Function));
     expect(api.on).toHaveBeenCalledWith("gateway_stop", expect.any(Function));
@@ -366,6 +367,196 @@ describe("intaris plugin", () => {
         .mocked(globalThis.fetch)
         .mock.calls.find(([url]) => String(url).includes("/api/v1/reasoning"));
       expect(reasoningCall).toBeUndefined();
+    });
+  });
+
+  describe("llm_output (assistant context tracking)", () => {
+    beforeEach(() => {
+      intarisPlugin.register(api as any);
+    });
+
+    it("stores last assistant text from llm_output", async () => {
+      // Create session first
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        mockResponse({ session_id: "oc-ctx1", status: "active" }),
+      );
+
+      await hooks.session_start(
+        { sessionId: "sess-ctx1", sessionKey: "ctx1" },
+        { agentId: "default", sessionKey: "ctx1", sessionId: "sess-ctx1" },
+      );
+
+      await vi.waitFor(() => {
+        expect(globalThis.fetch).toHaveBeenCalled();
+      });
+
+      // Fire llm_output with assistant texts
+      await hooks.llm_output(
+        { assistantTexts: ["I can refactor the database module for you."] },
+        { agentId: "default", sessionKey: "ctx1" },
+      );
+
+      // Now fire before_agent_start — the context should be included
+      vi.mocked(globalThis.fetch).mockClear();
+      vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse({}));
+
+      await hooks.before_agent_start(
+        { prompt: "ok, do it" },
+        { agentId: "default", sessionKey: "ctx1" },
+      );
+
+      const reasoningCall = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([url]) => String(url).includes("/api/v1/reasoning"));
+      expect(reasoningCall).toBeDefined();
+
+      const body = JSON.parse(reasoningCall![1]?.body as string);
+      expect(body.context).toBe("I can refactor the database module for you.");
+      expect(body.content).toContain("ok, do it");
+    });
+
+    it("uses last text when multiple assistantTexts are present", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        mockResponse({ session_id: "oc-ctx2", status: "active" }),
+      );
+
+      await hooks.session_start(
+        { sessionId: "sess-ctx2", sessionKey: "ctx2" },
+        { agentId: "default", sessionKey: "ctx2", sessionId: "sess-ctx2" },
+      );
+
+      await vi.waitFor(() => {
+        expect(globalThis.fetch).toHaveBeenCalled();
+      });
+
+      await hooks.llm_output(
+        { assistantTexts: ["First response", "Second response", "Final response"] },
+        { agentId: "default", sessionKey: "ctx2" },
+      );
+
+      vi.mocked(globalThis.fetch).mockClear();
+      vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse({}));
+
+      await hooks.before_agent_start({ prompt: "yes" }, { agentId: "default", sessionKey: "ctx2" });
+
+      const reasoningCall = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([url]) => String(url).includes("/api/v1/reasoning"));
+      const body = JSON.parse(reasoningCall![1]?.body as string);
+      expect(body.context).toBe("Final response");
+    });
+
+    it("consumes context after sending (cleared for next turn)", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        mockResponse({ session_id: "oc-ctx3", status: "active" }),
+      );
+
+      await hooks.session_start(
+        { sessionId: "sess-ctx3", sessionKey: "ctx3" },
+        { agentId: "default", sessionKey: "ctx3", sessionId: "sess-ctx3" },
+      );
+
+      await vi.waitFor(() => {
+        expect(globalThis.fetch).toHaveBeenCalled();
+      });
+
+      // Set assistant context
+      await hooks.llm_output(
+        { assistantTexts: ["Some context"] },
+        { agentId: "default", sessionKey: "ctx3" },
+      );
+
+      vi.mocked(globalThis.fetch).mockClear();
+      vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse({}));
+
+      // First user message — should include context
+      await hooks.before_agent_start(
+        { prompt: "do it" },
+        { agentId: "default", sessionKey: "ctx3" },
+      );
+
+      const firstCall = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([url]) => String(url).includes("/api/v1/reasoning"));
+      const firstBody = JSON.parse(firstCall![1]?.body as string);
+      expect(firstBody.context).toBe("Some context");
+
+      vi.mocked(globalThis.fetch).mockClear();
+      vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse({}));
+
+      // Second user message — context should be cleared
+      await hooks.before_agent_start(
+        { prompt: "another message" },
+        { agentId: "default", sessionKey: "ctx3" },
+      );
+
+      const secondCall = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([url]) => String(url).includes("/api/v1/reasoning"));
+      const secondBody = JSON.parse(secondCall![1]?.body as string);
+      expect(secondBody.context).toBeUndefined();
+    });
+
+    it("does not send context when no assistant text was captured", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        mockResponse({ session_id: "oc-ctx4", status: "active" }),
+      );
+
+      await hooks.session_start(
+        { sessionId: "sess-ctx4", sessionKey: "ctx4" },
+        { agentId: "default", sessionKey: "ctx4", sessionId: "sess-ctx4" },
+      );
+
+      await vi.waitFor(() => {
+        expect(globalThis.fetch).toHaveBeenCalled();
+      });
+
+      vi.mocked(globalThis.fetch).mockClear();
+      vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse({}));
+
+      // No llm_output fired — context should not be in the request
+      await hooks.before_agent_start(
+        { prompt: "hello" },
+        { agentId: "default", sessionKey: "ctx4" },
+      );
+
+      const reasoningCall = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([url]) => String(url).includes("/api/v1/reasoning"));
+      const body = JSON.parse(reasoningCall![1]?.body as string);
+      expect(body.context).toBeUndefined();
+    });
+
+    it("ignores llm_output with empty assistantTexts", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        mockResponse({ session_id: "oc-ctx5", status: "active" }),
+      );
+
+      await hooks.session_start(
+        { sessionId: "sess-ctx5", sessionKey: "ctx5" },
+        { agentId: "default", sessionKey: "ctx5", sessionId: "sess-ctx5" },
+      );
+
+      await vi.waitFor(() => {
+        expect(globalThis.fetch).toHaveBeenCalled();
+      });
+
+      // Fire llm_output with empty array
+      await hooks.llm_output({ assistantTexts: [] }, { agentId: "default", sessionKey: "ctx5" });
+
+      vi.mocked(globalThis.fetch).mockClear();
+      vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse({}));
+
+      await hooks.before_agent_start(
+        { prompt: "hello" },
+        { agentId: "default", sessionKey: "ctx5" },
+      );
+
+      const reasoningCall = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([url]) => String(url).includes("/api/v1/reasoning"));
+      const body = JSON.parse(reasoningCall![1]?.body as string);
+      expect(body.context).toBeUndefined();
     });
   });
 
