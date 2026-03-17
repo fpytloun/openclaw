@@ -597,7 +597,7 @@ describe("MnemoryClient", () => {
 
   test("sends Authorization and X-Agent-Id headers", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ memories: [], total: 0 }), {
+      new Response(JSON.stringify({ results: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -622,7 +622,7 @@ describe("MnemoryClient", () => {
 
   test("sends X-User-Id header when userId is set", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ memories: [], total: 0 }), {
+      new Response(JSON.stringify({ results: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -645,7 +645,7 @@ describe("MnemoryClient", () => {
 
   test("omits X-User-Id header when userId is empty", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ memories: [], total: 0 }), {
+      new Response(JSON.stringify({ results: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -776,7 +776,7 @@ describe("MnemoryClient", () => {
 
   test("listMemories builds query string from params", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ memories: [], total: 0 }), {
+      new Response(JSON.stringify({ results: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -801,7 +801,7 @@ describe("MnemoryClient", () => {
 
   test("omits Authorization header when apiKey is empty", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ memories: [], total: 0 }), {
+      new Response(JSON.stringify({ results: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),

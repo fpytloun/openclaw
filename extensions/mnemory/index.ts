@@ -287,13 +287,13 @@ const mnemoryPlugin = {
               details: {},
             };
           }
-          if (result.memories.length === 0) {
+          if (result.results.length === 0) {
             return {
               content: [{ type: "text", text: "No memories found matching your query." }],
               details: { count: 0 },
             };
           }
-          const lines = result.memories.map((m, i) => {
+          const lines = result.results.map((m, i) => {
             const score = m.score != null ? ` (${Math.round(m.score * 100)}%)` : "";
             const type = m.memory_type ? ` [${m.memory_type}]` : "";
             return `${i + 1}. ${m.memory}${score}${type} (id: ${m.id})`;
@@ -302,10 +302,10 @@ const mnemoryPlugin = {
             content: [
               {
                 type: "text",
-                text: `Found ${result.memories.length} memories:\n${lines.join("\n")}`,
+                text: `Found ${result.results.length} memories:\n${lines.join("\n")}`,
               },
             ],
-            details: { memories: result.memories },
+            details: { memories: result.results },
           };
         },
       },
@@ -494,13 +494,13 @@ const mnemoryPlugin = {
               details: {},
             };
           }
-          if (result.memories.length === 0) {
+          if (result.results.length === 0) {
             return {
               content: [{ type: "text", text: "No memories found." }],
               details: { count: 0 },
             };
           }
-          const lines = result.memories.map((m, i) => {
+          const lines = result.results.map((m, i) => {
             const type = m.memory_type ? ` [${m.memory_type}]` : "";
             const pinned = m.pinned ? " (pinned)" : "";
             return `${i + 1}. ${m.memory}${type}${pinned} (id: ${m.id})`;
@@ -509,10 +509,10 @@ const mnemoryPlugin = {
             content: [
               {
                 type: "text",
-                text: `${result.total} memories total, showing ${result.memories.length}:\n${lines.join("\n")}`,
+                text: `Showing ${result.results.length} memories:\n${lines.join("\n")}`,
               },
             ],
-            details: { memories: result.memories, total: result.total },
+            details: { memories: result.results },
           };
         },
       },
@@ -691,11 +691,11 @@ const mnemoryPlugin = {
               { query, limit: Number.parseInt(opts.limit, 10) },
               "openclaw",
             );
-            if (!result || result.memories.length === 0) {
+            if (!result || result.results.length === 0) {
               console.log("No memories found.");
               return;
             }
-            for (const m of result.memories) {
+            for (const m of result.results) {
               const score = m.score != null ? ` (${Math.round(m.score * 100)}%)` : "";
               const type = m.memory_type ? ` [${m.memory_type}]` : "";
               console.log(`  ${m.id} ${m.memory}${score}${type}`);
@@ -715,12 +715,12 @@ const mnemoryPlugin = {
               },
               "openclaw",
             );
-            if (!result || result.memories.length === 0) {
+            if (!result || result.results.length === 0) {
               console.log("No memories found.");
               return;
             }
-            console.log(`${result.total} memories total:\n`);
-            for (const m of result.memories) {
+            console.log(`${result.results.length} memories:\n`);
+            for (const m of result.results) {
               const type = m.memory_type ? ` [${m.memory_type}]` : "";
               const pinned = m.pinned ? " (pinned)" : "";
               console.log(`  ${m.id} ${m.memory}${type}${pinned}`);
