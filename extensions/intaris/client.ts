@@ -244,15 +244,15 @@ export class IntarisClient {
     );
   }
 
-  async submitReasoning(sessionId: string, content: string, agentId?: string): Promise<ApiResult> {
-    return this.callApi(
-      "POST",
-      "/api/v1/reasoning",
-      { session_id: sessionId, content },
-      2000,
-      undefined,
-      agentId,
-    );
+  async submitReasoning(
+    sessionId: string,
+    content: string,
+    agentId?: string,
+    context?: string,
+  ): Promise<ApiResult> {
+    const body: Record<string, unknown> = { session_id: sessionId, content };
+    if (context) body.context = context;
+    return this.callApi("POST", "/api/v1/reasoning", body, 2000, undefined, agentId);
   }
 
   async appendEvents(
