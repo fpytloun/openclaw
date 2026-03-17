@@ -191,7 +191,12 @@ const mnemoryPlugin = {
 
   register(api: OpenClawPluginApi) {
     const cfg = mnemoryConfigSchema.parse(api.pluginConfig as Record<string, unknown>);
-    const client = new MnemoryClient({ url: cfg.url, apiKey: cfg.apiKey, logger: api.logger });
+    const client = new MnemoryClient({
+      url: cfg.url,
+      apiKey: cfg.apiKey,
+      userId: cfg.userId,
+      logger: api.logger,
+    });
     const store = createSessionStore();
 
     // Track the agent ID from hook context so tools can use it

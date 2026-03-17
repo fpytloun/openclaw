@@ -142,11 +142,13 @@ const REQUEST_TIMEOUT_MS = 30_000;
 export class MnemoryClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
+  private readonly userId: string;
   private readonly logger: Logger;
 
-  constructor(opts: { url: string; apiKey: string; logger: Logger }) {
+  constructor(opts: { url: string; apiKey: string; userId?: string; logger: Logger }) {
     this.baseUrl = opts.url;
     this.apiKey = opts.apiKey;
+    this.userId = opts.userId ?? "";
     this.logger = opts.logger;
   }
 
@@ -160,6 +162,9 @@ export class MnemoryClient {
     };
     if (this.apiKey) {
       h["Authorization"] = `Bearer ${this.apiKey}`;
+    }
+    if (this.userId) {
+      h["X-User-Id"] = this.userId;
     }
     if (agentId) {
       h["X-Agent-Id"] = agentId;

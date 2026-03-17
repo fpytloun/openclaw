@@ -23,14 +23,17 @@ describe("mnemoryConfigSchema", () => {
   afterEach(() => {
     delete process.env.MNEMORY_URL;
     delete process.env.MNEMORY_API_KEY;
+    delete process.env.MNEMORY_USER_ID;
     delete process.env.TEST_MNEMORY_URL;
     delete process.env.TEST_MNEMORY_KEY;
+    delete process.env.TEST_MNEMORY_USER;
   });
 
   test("parses valid config with all fields", () => {
     const cfg = mnemoryConfigSchema.parse({
       url: "http://localhost:8050",
       apiKey: "test-key",
+      userId: "filip",
       autoRecall: false,
       autoCapture: false,
       scoreThreshold: 0.7,
@@ -40,6 +43,7 @@ describe("mnemoryConfigSchema", () => {
 
     expect(cfg.url).toBe("http://localhost:8050");
     expect(cfg.apiKey).toBe("test-key");
+    expect(cfg.userId).toBe("filip");
     expect(cfg.autoRecall).toBe(false);
     expect(cfg.autoCapture).toBe(false);
     expect(cfg.scoreThreshold).toBe(0.7);
@@ -58,6 +62,24 @@ describe("mnemoryConfigSchema", () => {
     expect(cfg.includeAssistant).toBe(false);
     expect(cfg.managed).toBe(true);
     expect(cfg.apiKey).toBe("");
+    expect(cfg.userId).toBe("");
+  });
+
+  test("resolves ${ENV_VAR} in userId", () => {
+    process.env.TEST_MNEMORY_USER = "user-from-env";
+    const cfg = mnemoryConfigSchema.parse({
+      url: "http://localhost:8050",
+      userId: "${TEST_MNEMORY_USER}",
+    });
+    expect(cfg.userId).toBe("user-from-env");
+  });
+
+  test("falls back to MNEMORY_USER_ID env var when userId is missing", () => {
+    process.env.MNEMORY_USER_ID = "fallback-user";
+    const cfg = mnemoryConfigSchema.parse({
+      url: "http://localhost:8050",
+    });
+    expect(cfg.userId).toBe("fallback-user");
   });
 
   test("resolves ${ENV_VAR} in url", () => {
@@ -594,6 +616,52 @@ describe("MnemoryClient", () => {
     const headers = callArgs[1]?.headers as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer my-secret");
     expect(headers["X-Agent-Id"]).toBe("test-agent");
+
+    fetchSpy.mockRestore();
+  });
+
+  test("sends X-User-Id header when userId is set", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ memories: [], total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const client = new MnemoryClient({
+      url: "http://localhost:8050",
+      apiKey: "my-secret",
+      userId: "filip",
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    await client.listMemories({}, "test-agent");
+
+    const headers = fetchSpy.mock.calls[0]![1]?.headers as Record<string, string>;
+    expect(headers["X-User-Id"]).toBe("filip");
+
+    fetchSpy.mockRestore();
+  });
+
+  test("omits X-User-Id header when userId is empty", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ memories: [], total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const client = new MnemoryClient({
+      url: "http://localhost:8050",
+      apiKey: "my-secret",
+      userId: "",
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    await client.listMemories({});
+
+    const headers = fetchSpy.mock.calls[0]![1]?.headers as Record<string, string>;
+    expect(headers["X-User-Id"]).toBeUndefined();
 
     fetchSpy.mockRestore();
   });

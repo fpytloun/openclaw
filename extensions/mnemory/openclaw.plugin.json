@@ -13,6 +13,11 @@
       "placeholder": "your-api-key",
       "help": "Bearer token for mnemory authentication (or use ${MNEMORY_API_KEY})"
     },
+    "userId": {
+      "label": "User ID",
+      "placeholder": "your-user-id",
+      "help": "Sent as X-User-Id header. Required when the API key is a wildcard or auth is disabled (or use ${MNEMORY_USER_ID})"
+    },
     "autoRecall": {
       "label": "Auto-Recall",
       "help": "Automatically inject relevant memories into context before each agent turn"
@@ -46,6 +51,9 @@
         "type": "string"
       },
       "apiKey": {
+        "type": "string"
+      },
+      "userId": {
         "type": "string"
       },
       "autoRecall": {
