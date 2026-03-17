@@ -58,7 +58,7 @@ export type SearchMemoriesParams = {
 };
 
 export type SearchMemoriesResponse = {
-  memories: Array<{
+  results: Array<{
     id: string;
     memory: string;
     score?: number;
@@ -123,8 +123,7 @@ export type MemoryItem = {
 };
 
 export type ListMemoriesResponse = {
-  memories: MemoryItem[];
-  total: number;
+  results: MemoryItem[];
 };
 
 type Logger = {
