@@ -6,7 +6,13 @@
  * safe (never throw on network errors when used with .catch(() => {})).
  */
 
-import type { ApiResult, IntarisConfig, RecordingEvent } from "./types.js";
+import type {
+  ApiResult,
+  IntarisConfig,
+  McpCallResult,
+  McpToolDef,
+  RecordingEvent,
+} from "./types.js";
 
 type Logger = (
   level: "info" | "warn" | "error",
@@ -268,5 +274,49 @@ export class IntarisClient {
       { "X-Intaris-Source": "openclaw" },
       agentId,
     );
+  }
+
+  // -- MCP API --------------------------------------------------------------
+
+  /**
+   * Fetch the list of available MCP tools from all configured MCP servers.
+   * Returns an empty array on failure (never throws).
+   */
+  async listMcpTools(agentId?: string): Promise<McpToolDef[]> {
+    const result = await this.callApi("GET", "/api/v1/mcp/tools", null, 10000, undefined, agentId);
+    if (!result.data) {
+      return [];
+    }
+    const tools = (result.data as { tools?: unknown }).tools;
+    if (!Array.isArray(tools)) {
+      this.log("warn", "MCP tools response missing 'tools' array");
+      return [];
+    }
+    return tools as McpToolDef[];
+  }
+
+  /**
+   * Proxy a tool call to an MCP server via Intaris.
+   * Uses retry logic since MCP tool execution can be slow.
+   */
+  async callMcpTool(
+    sessionId: string,
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+    agentId?: string,
+  ): Promise<{ data: McpCallResult | null; error: string | null }> {
+    const result = await this.callApiWithRetry(
+      "POST",
+      "/api/v1/mcp/call",
+      { session_id: sessionId, server, tool, arguments: args },
+      60000,
+      2,
+      agentId,
+    );
+    if (!result.data) {
+      return { data: null, error: result.error };
+    }
+    return { data: result.data as unknown as McpCallResult, error: null };
   }
 }

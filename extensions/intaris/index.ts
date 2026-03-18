@@ -29,12 +29,23 @@
  *   recording / INTARIS_SESSION_RECORDING       - Enable session recording (default: false)
  *   recordingFlushSize / INTARIS_RECORDING_FLUSH_SIZE - Events per recording batch (default: 50)
  *   recordingFlushMs / INTARIS_RECORDING_FLUSH_MS     - Recording flush interval in ms (default: 10000)
+ *   mcpTools / INTARIS_MCP_TOOLS                      - Enable MCP tool proxy (default: true)
+ *   mcpToolsCacheTtlMs / INTARIS_MCP_TOOLS_CACHE_TTL_MS - MCP tool list cache TTL in ms (default: 900000 = 15 min)
  */
 
+import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/intaris";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/intaris";
 import { IntarisClient } from "./client.js";
-import type { EvaluateResponse, IntarisConfig, RecordingEvent, SessionState } from "./types.js";
+import type {
+  EvaluateResponse,
+  IntarisConfig,
+  McpCallResult,
+  McpToolCache,
+  McpToolDef,
+  RecordingEvent,
+  SessionState,
+} from "./types.js";
 
 // ============================================================================
 // Constants
@@ -62,6 +73,9 @@ function resolveConfig(pluginConfig?: Record<string, unknown>): IntarisConfig {
   const rawRecordingFlushMs = Number(
     cfg.recordingFlushMs ?? process.env.INTARIS_RECORDING_FLUSH_MS ?? 10000,
   );
+  const rawMcpToolsCacheTtlMs = Number(
+    cfg.mcpToolsCacheTtlMs ?? process.env.INTARIS_MCP_TOOLS_CACHE_TTL_MS ?? 900000,
+  );
 
   return {
     url: String(cfg.url || process.env.INTARIS_URL || "http://localhost:8060"),
@@ -77,6 +91,12 @@ function resolveConfig(pluginConfig?: Record<string, unknown>): IntarisConfig {
       (process.env.INTARIS_SESSION_RECORDING || "false").toLowerCase() === "true",
     recordingFlushSize: isNaN(rawRecordingFlushSize) ? 50 : rawRecordingFlushSize,
     recordingFlushMs: isNaN(rawRecordingFlushMs) ? 10000 : rawRecordingFlushMs,
+    mcpTools:
+      cfg.mcpTools === false
+        ? false
+        : cfg.mcpTools === true ||
+          (process.env.INTARIS_MCP_TOOLS || "true").toLowerCase() === "true",
+    mcpToolsCacheTtlMs: isNaN(rawMcpToolsCacheTtlMs) ? 900000 : rawMcpToolsCacheTtlMs,
   };
 }
 
@@ -338,6 +358,142 @@ const intarisPlugin = {
         .catch(() => {});
     }
 
+    // -- MCP Tool Proxy -------------------------------------------------------
+
+    // Cached MCP tool list, shared across sessions.
+    let mcpToolCache: McpToolCache | null = null;
+    let mcpToolFetchInFlight: Promise<McpToolDef[]> | null = null;
+
+    /** Refresh the MCP tool cache from the Intaris backend. */
+    async function refreshMcpToolCache(agentId?: string): Promise<McpToolDef[]> {
+      // Deduplicate concurrent fetches
+      if (mcpToolFetchInFlight) return mcpToolFetchInFlight;
+
+      mcpToolFetchInFlight = (async () => {
+        try {
+          const tools = await client.listMcpTools(agentId);
+          mcpToolCache = { tools, fetchedAt: Date.now() };
+          if (tools.length > 0) {
+            log(
+              "info",
+              `MCP tool cache refreshed: ${tools.length} tools from ${new Set(tools.map((t) => t.server)).size} server(s)`,
+            );
+          }
+          return tools;
+        } catch (err) {
+          log("warn", `MCP tool cache refresh failed: ${err}`);
+          return mcpToolCache?.tools ?? [];
+        } finally {
+          mcpToolFetchInFlight = null;
+        }
+      })();
+
+      return mcpToolFetchInFlight;
+    }
+
+    /** Check if the MCP tool cache is stale. */
+    function isMcpCacheStale(): boolean {
+      if (!mcpToolCache) return true;
+      return Date.now() - mcpToolCache.fetchedAt > cfg.mcpToolsCacheTtlMs;
+    }
+
+    /**
+     * Build an OpenClaw AgentTool from an MCP tool definition.
+     * The execute function proxies the call through Intaris.
+     */
+    function buildMcpAgentTool(mcpTool: McpToolDef) {
+      const toolName = `${mcpTool.server}_${mcpTool.name}`;
+      return {
+        name: toolName,
+        label: mcpTool.title || mcpTool.name,
+        description: `[MCP: ${mcpTool.server}] ${mcpTool.description || mcpTool.name}`,
+        parameters: Type.Unsafe(mcpTool.inputSchema),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          // Find the Intaris session for the current context.
+          // The tool factory doesn't have direct access to sessionKey, so we
+          // look up the first active (non-idle) session, falling back to any session.
+          let intarisSessionId: string | null = null;
+          for (const [, state] of sessions) {
+            if (state.intarisSessionId) {
+              intarisSessionId = state.intarisSessionId;
+              if (!state.isIdle) break;
+            }
+          }
+
+          if (!intarisSessionId) {
+            return {
+              content: [{ type: "text", text: `[intaris] No active session for MCP tool call` }],
+              details: { error: "no_session" },
+            };
+          }
+
+          const { data, error } = await client.callMcpTool(
+            intarisSessionId,
+            mcpTool.server,
+            mcpTool.name,
+            params,
+          );
+
+          if (!data) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `[intaris] MCP tool call failed: ${error || "unknown error"}`,
+                },
+              ],
+              details: { error: error || "unknown" },
+            };
+          }
+
+          const result = data as McpCallResult;
+          if (result.isError) {
+            const errorText =
+              result.content?.map((c) => c.text || JSON.stringify(c)).join("\n") ||
+              "MCP tool returned an error";
+            return {
+              content: [{ type: "text", text: `[MCP error] ${errorText}` }],
+              details: { isError: true, latency_ms: result.latency_ms },
+            };
+          }
+
+          // Map MCP content to OpenClaw content format
+          const content = (result.content || []).map((c) => ({
+            type: "text" as const,
+            text: c.text || JSON.stringify(c),
+          }));
+
+          return {
+            content: content.length > 0 ? content : [{ type: "text", text: "(empty result)" }],
+            details: { latency_ms: result.latency_ms },
+          };
+        },
+      };
+    }
+
+    // Register MCP tool factory if enabled.
+    // The factory is called synchronously per agent run, so it reads from the cache.
+    if (cfg.mcpTools) {
+      // Eagerly fetch the tool list at plugin init (best-effort, non-blocking).
+      refreshMcpToolCache().catch(() => {});
+
+      // The factory return type is structurally compatible with AnyAgentTool[]
+      // but TypeScript widens `type: "text"` to `string` in mapped arrays.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      api.registerTool(((ctx: { agentId?: string }) => {
+        // Return cached MCP tools as OpenClaw AgentTool objects.
+        // If cache is stale, trigger a background refresh for the next run.
+        if (isMcpCacheStale()) {
+          refreshMcpToolCache(ctx.agentId).catch(() => {});
+        }
+
+        const tools = mcpToolCache?.tools;
+        if (!tools || tools.length === 0) return null;
+
+        return tools.map(buildMcpAgentTool);
+      }) as Parameters<typeof api.registerTool>[0]);
+    }
+
     // -- Hooks ---------------------------------------------------------------
 
     // Initialization logging
@@ -358,6 +514,7 @@ const intarisPlugin = {
       failOpen: cfg.failOpen,
       checkpointInterval: cfg.checkpointInterval,
       recording: cfg.recording,
+      mcpTools: cfg.mcpTools,
     });
 
     // -- session_start: Create Intaris session --------------------------------
@@ -368,6 +525,11 @@ const intarisPlugin = {
       const state = getOrCreateState(sessionKey);
       // Pre-create the Intaris session (best-effort, non-blocking)
       ensureSession(sessionKey, state, ctx).catch(() => {});
+
+      // Refresh MCP tool cache on session start (best-effort, non-blocking)
+      if (cfg.mcpTools && isMcpCacheStale()) {
+        refreshMcpToolCache(ctx.agentId).catch(() => {});
+      }
     });
 
     // -- before_reset: User sent /new or /reset — close current Intaris session

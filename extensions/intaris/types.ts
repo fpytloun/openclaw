@@ -15,6 +15,10 @@ export interface IntarisConfig {
   recording: boolean;
   recordingFlushSize: number;
   recordingFlushMs: number;
+  /** Enable MCP tool proxy — fetches tools from Intaris MCP servers and registers them as agent tools. */
+  mcpTools: boolean;
+  /** Cache TTL for the MCP tool list in milliseconds (default: 900000 = 15 min). */
+  mcpToolsCacheTtlMs: number;
 }
 
 // -- API Types --------------------------------------------------------------
@@ -62,6 +66,35 @@ export interface AuditRecord {
   call_id: string;
   user_decision?: "approve" | "deny" | null;
   user_note?: string | null;
+}
+
+// -- MCP Types --------------------------------------------------------------
+
+/** MCP tool definition as returned by the Intaris backend. */
+export interface McpToolDef {
+  /** MCP server name (e.g., "github") */
+  server: string;
+  /** MCP tool name (e.g., "create_issue") */
+  name: string;
+  /** Human-readable display name */
+  title?: string;
+  /** Tool description for the LLM */
+  description?: string;
+  /** JSON Schema for tool input parameters */
+  inputSchema: Record<string, unknown>;
+}
+
+/** Result of an MCP tool call proxied through Intaris. */
+export interface McpCallResult {
+  content: Array<{ type: string; text?: string; [key: string]: unknown }>;
+  isError?: boolean;
+  latency_ms?: number;
+}
+
+/** Cached MCP tool list with fetch timestamp. */
+export interface McpToolCache {
+  tools: McpToolDef[];
+  fetchedAt: number;
 }
 
 // -- Plugin State -----------------------------------------------------------
