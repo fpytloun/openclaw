@@ -573,19 +573,34 @@ const mnemoryPlugin = {
               minimum: 1,
             }),
           ),
+          labels: Type.Optional(
+            Type.Record(Type.String(), Type.Unknown(), {
+              description: "Key-value metadata labels (e.g. project, topic)",
+            }),
+          ),
         }),
         async execute(_toolCallId, params) {
-          const { content, memory_type, importance, categories, pinned, infer, role, ttl_days } =
-            params as {
-              content: string;
-              memory_type?: string;
-              importance?: string;
-              categories?: string[];
-              pinned?: boolean;
-              infer?: boolean;
-              role?: string;
-              ttl_days?: number;
-            };
+          const {
+            content,
+            memory_type,
+            importance,
+            categories,
+            pinned,
+            infer,
+            role,
+            ttl_days,
+            labels,
+          } = params as {
+            content: string;
+            memory_type?: string;
+            importance?: string;
+            categories?: string[];
+            pinned?: boolean;
+            infer?: boolean;
+            role?: string;
+            ttl_days?: number;
+            labels?: Record<string, unknown>;
+          };
           const result = await client.addMemory(
             {
               content,
@@ -596,6 +611,7 @@ const mnemoryPlugin = {
               infer,
               role,
               ttlDays: ttl_days,
+              labels: { source: "openclaw", ...labels },
             },
             lastAgentId,
           );
@@ -663,6 +679,11 @@ const mnemoryPlugin = {
                 Type.String({ description: "Importance: low, normal, high, critical" }),
               ),
               categories: Type.Optional(Type.Array(Type.String())),
+              labels: Type.Optional(
+                Type.Record(Type.String(), Type.Unknown(), {
+                  description: "Key-value metadata labels",
+                }),
+              ),
             }),
             { description: "List of memories to store" },
           ),
@@ -674,6 +695,7 @@ const mnemoryPlugin = {
               memory_type?: string;
               importance?: string;
               categories?: string[];
+              labels?: Record<string, unknown>;
             }>;
           };
           const items: AddMemoriesBatchItem[] = memories.map((m) => ({
@@ -681,6 +703,7 @@ const mnemoryPlugin = {
             memoryType: m.memory_type,
             importance: m.importance,
             categories: m.categories,
+            labels: { source: "openclaw", ...m.labels },
           }));
           const result = await client.addMemoriesBatch(items, lastAgentId);
           if (!result) {
