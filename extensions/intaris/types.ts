@@ -127,4 +127,6 @@ export interface SessionState {
   recordingBuffer: RecordingEvent[];
   /** Last assistant response text, consumed as context for the next reasoning call */
   lastAssistantText: string;
+  /** In-flight session creation promise (prevents duplicate creation). */
+  creating?: Promise<string | null>;
 }

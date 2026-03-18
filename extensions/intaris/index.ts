@@ -316,43 +316,56 @@ const intarisPlugin = {
     ): Promise<string | null> {
       if (state.intarisSessionId) return state.intarisSessionId;
 
-      // Unique Intaris session ID per session instance. Each gateway restart
-      // or /new / /reset gets a fresh session — no resume-on-reconnect.
-      const intarisSessionId = `oc-${crypto.randomUUID()}`;
-      const intention = buildIntention(ctx);
-      const details = buildDetails(ctx);
-      const policy = buildPolicy(cfg.allowPaths);
+      // If another call is already creating the session, wait for it
+      // instead of creating a duplicate. This prevents the race between
+      // session_start (fire-and-forget) and before_agent_start (awaited).
+      if (state.creating) return state.creating;
 
-      const { data, error, status } = await client.createIntention(
-        intarisSessionId,
-        intention,
-        details,
-        policy,
-        null, // no parent session tracking for now
-        ctx.agentId,
-      );
+      state.creating = (async () => {
+        // Unique Intaris session ID per session instance. Each gateway restart
+        // or /new / /reset gets a fresh session — no resume-on-reconnect.
+        const intarisSessionId = `oc-${crypto.randomUUID()}`;
+        const intention = buildIntention(ctx);
+        const details = buildDetails(ctx);
+        const policy = buildPolicy(cfg.allowPaths);
 
-      if (data) {
-        state.intarisSessionId = intarisSessionId;
-        state.sessionCreated = true;
-        log("info", `Session created: ${intarisSessionId}`);
-      } else if (status === 409) {
-        // Session already exists (resumed session) -- reuse it
-        state.intarisSessionId = intarisSessionId;
-        log("info", `Session already exists, reusing: ${intarisSessionId}`);
-        // Re-activate and update intention
-        client.updateStatus(intarisSessionId, "active", ctx.agentId).catch(() => {});
-        client.updateSession(intarisSessionId, intention, details, ctx.agentId).catch(() => {});
-      } else if (status !== null && status >= 400 && status < 500) {
-        // Client error (auth, validation) -- propagate, don't retry
-        state.lastError = error || `HTTP ${status}`;
-        return null;
-      } else {
-        // Server error or network issue -- try using it anyway
-        state.intarisSessionId = intarisSessionId;
+        const { data, error, status } = await client.createIntention(
+          intarisSessionId,
+          intention,
+          details,
+          policy,
+          null, // no parent session tracking for now
+          ctx.agentId,
+        );
+
+        if (data) {
+          state.intarisSessionId = intarisSessionId;
+          state.sessionCreated = true;
+          log("info", `Session created: ${intarisSessionId}`);
+        } else if (status === 409) {
+          // Session already exists (resumed session) -- reuse it
+          state.intarisSessionId = intarisSessionId;
+          log("info", `Session already exists, reusing: ${intarisSessionId}`);
+          // Re-activate and update intention
+          client.updateStatus(intarisSessionId, "active", ctx.agentId).catch(() => {});
+          client.updateSession(intarisSessionId, intention, details, ctx.agentId).catch(() => {});
+        } else if (status !== null && status >= 400 && status < 500) {
+          // Client error (auth, validation) -- propagate, don't retry
+          state.lastError = error || `HTTP ${status}`;
+          return null;
+        } else {
+          // Server error or network issue -- try using it anyway
+          state.intarisSessionId = intarisSessionId;
+        }
+
+        return state.intarisSessionId;
+      })();
+
+      try {
+        return await state.creating;
+      } finally {
+        state.creating = undefined;
       }
-
-      return state.intarisSessionId;
     }
 
     // -- Recording Helpers ---------------------------------------------------
