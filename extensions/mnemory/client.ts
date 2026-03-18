@@ -54,6 +54,8 @@ export type SearchMemoriesParams = {
   role?: string;
   limit?: number;
   includeDecayed?: boolean;
+  dateStart?: string;
+  dateEnd?: string;
   labels?: Record<string, unknown>;
 };
 
@@ -70,6 +72,42 @@ export type SearchMemoriesResponse = {
   }>;
 };
 
+export type FindMemoriesParams = {
+  question: string;
+  memoryType?: string;
+  categories?: string[];
+  role?: string;
+  limit?: number;
+  includeDecayed?: boolean;
+  context?: string;
+  labels?: Record<string, unknown>;
+};
+
+export type AskMemoriesParams = {
+  question: string;
+  memoryType?: string;
+  categories?: string[];
+  role?: string;
+  limit?: number;
+  includeDecayed?: boolean;
+  context?: string;
+  includeMemories?: boolean;
+  labels?: Record<string, unknown>;
+};
+
+export type AskMemoriesResponse = {
+  answer: string;
+  results: Array<{
+    id: string;
+    memory: string;
+    score?: number;
+    memory_type?: string;
+  }>;
+  count: number;
+  queries: string[];
+  stats: Record<string, unknown>;
+};
+
 export type AddMemoryParams = {
   content: string;
   memoryType?: string;
@@ -79,6 +117,7 @@ export type AddMemoryParams = {
   infer?: boolean;
   role?: string;
   ttlDays?: number;
+  eventDate?: string;
   labels?: Record<string, unknown>;
 };
 
@@ -92,6 +131,47 @@ export type AddMemoryResponse = {
   message?: string;
 };
 
+export type AddMemoriesBatchItem = {
+  content: string;
+  memoryType?: string;
+  categories?: string[];
+  importance?: string;
+  pinned?: boolean;
+  infer?: boolean;
+  role?: string;
+  ttlDays?: number;
+  eventDate?: string;
+  labels?: Record<string, unknown>;
+};
+
+export type AddMemoriesBatchResponse = {
+  results: Array<{
+    id: string;
+    memory: string;
+    event?: string;
+  }>;
+  errors: Array<{
+    index: number;
+    error: boolean;
+    message: string;
+  }>;
+  total: number;
+  succeeded: number;
+  failed: number;
+};
+
+export type DeleteMemoriesBatchResponse = {
+  results: Array<Record<string, unknown>>;
+  errors: Array<{
+    memory_id: string;
+    error: boolean;
+    message: string;
+  }>;
+  total: number;
+  succeeded: number;
+  failed: number;
+};
+
 export type UpdateMemoryParams = {
   content?: string;
   memoryType?: string;
@@ -99,6 +179,7 @@ export type UpdateMemoryParams = {
   importance?: string;
   pinned?: boolean;
   ttlDays?: number;
+  eventDate?: string;
   labels?: Record<string, unknown>;
 };
 
@@ -124,6 +205,52 @@ export type MemoryItem = {
 
 export type ListMemoriesResponse = {
   results: MemoryItem[];
+};
+
+export type GetRecentMemoriesParams = {
+  days?: number;
+  scope?: string;
+  limit?: number;
+  includeDecayed?: boolean;
+};
+
+export type TextResponse = {
+  text: string;
+};
+
+export type SaveArtifactParams = {
+  content: string;
+  filename?: string;
+  contentType?: string;
+};
+
+export type ArtifactMetadata = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  created_at: string;
+};
+
+export type GetArtifactParams = {
+  offset?: number;
+  limit?: number;
+};
+
+export type GetArtifactResponse = {
+  content: string;
+  total_size: number;
+  has_more: boolean;
+};
+
+export type CategoryItem = {
+  name: string;
+  description?: string;
+  count: number;
+};
+
+export type ListCategoriesResponse = {
+  categories: CategoryItem[];
 };
 
 type Logger = {
@@ -208,26 +335,26 @@ export class MnemoryClient {
     }
   }
 
-  private async patch(path: string, body: unknown, agentId?: string): Promise<boolean> {
+  private async put(path: string, body: unknown, agentId?: string): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
-        method: "PATCH",
+        method: "PUT",
         headers: this.headers(agentId),
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!res.ok) {
-        this.logger.warn(`mnemory: PATCH ${path} returned ${res.status}: ${await res.text()}`);
+        this.logger.warn(`mnemory: PUT ${path} returned ${res.status}: ${await res.text()}`);
         return false;
       }
       return true;
     } catch (err) {
-      this.logger.warn(`mnemory: PATCH ${path} failed: ${String(err)}`);
+      this.logger.warn(`mnemory: PUT ${path} failed: ${String(err)}`);
       return false;
     }
   }
 
-  private async delete(path: string, agentId?: string): Promise<boolean> {
+  private async del(path: string, agentId?: string): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
         method: "DELETE",
@@ -246,7 +373,7 @@ export class MnemoryClient {
   }
 
   // --------------------------------------------------------------------------
-  // Public API
+  // Public API — Recall / Remember (lifecycle hooks)
   // --------------------------------------------------------------------------
 
   /**
@@ -287,6 +414,10 @@ export class MnemoryClient {
     );
   }
 
+  // --------------------------------------------------------------------------
+  // Public API — Search
+  // --------------------------------------------------------------------------
+
   /**
    * POST /api/memories/search — semantic search across memories.
    */
@@ -303,11 +434,69 @@ export class MnemoryClient {
         role: params.role ?? undefined,
         limit: params.limit ?? 10,
         include_decayed: params.includeDecayed ?? false,
+        date_start: params.dateStart ?? undefined,
+        date_end: params.dateEnd ?? undefined,
         labels: params.labels ?? undefined,
       },
       agentId,
     );
   }
+
+  /**
+   * POST /api/memories/find — AI-powered multi-query search with LLM reranking.
+   * Generates multiple targeted searches covering different angles, then reranks
+   * by relevance. Slower than searchMemories (2 extra LLM calls) but higher
+   * quality for complex, multi-faceted questions.
+   */
+  async findMemories(
+    params: FindMemoriesParams,
+    agentId?: string,
+  ): Promise<SearchMemoriesResponse | null> {
+    return this.post<SearchMemoriesResponse>(
+      "/api/memories/find",
+      {
+        question: params.question,
+        memory_type: params.memoryType ?? undefined,
+        categories: params.categories ?? undefined,
+        role: params.role ?? undefined,
+        limit: params.limit ?? 10,
+        include_decayed: params.includeDecayed ?? false,
+        context: params.context ?? undefined,
+        labels: params.labels ?? undefined,
+      },
+      agentId,
+    );
+  }
+
+  /**
+   * POST /api/memories/ask — ask a question and get a human-readable answer.
+   * Uses findMemories internally, then generates a natural language answer.
+   * Most expensive operation (3 LLM calls).
+   */
+  async askMemories(
+    params: AskMemoriesParams,
+    agentId?: string,
+  ): Promise<AskMemoriesResponse | null> {
+    return this.post<AskMemoriesResponse>(
+      "/api/memories/ask",
+      {
+        question: params.question,
+        memory_type: params.memoryType ?? undefined,
+        categories: params.categories ?? undefined,
+        role: params.role ?? undefined,
+        limit: params.limit ?? 10,
+        include_decayed: params.includeDecayed ?? false,
+        context: params.context ?? undefined,
+        include_memories: params.includeMemories ?? false,
+        labels: params.labels ?? undefined,
+      },
+      agentId,
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // Public API — CRUD
+  // --------------------------------------------------------------------------
 
   /**
    * POST /api/memories — add a single memory.
@@ -324,6 +513,7 @@ export class MnemoryClient {
         infer: params.infer ?? true,
         role: params.role ?? undefined,
         ttl_days: params.ttlDays ?? undefined,
+        event_date: params.eventDate ?? undefined,
         labels: params.labels ?? undefined,
       },
       agentId,
@@ -331,10 +521,37 @@ export class MnemoryClient {
   }
 
   /**
-   * PATCH /api/memories/:id — update a memory.
+   * POST /api/memories/batch — add multiple memories in a single call.
+   */
+  async addMemoriesBatch(
+    memories: AddMemoriesBatchItem[],
+    agentId?: string,
+  ): Promise<AddMemoriesBatchResponse | null> {
+    return this.post<AddMemoriesBatchResponse>(
+      "/api/memories/batch",
+      {
+        memories: memories.map((m) => ({
+          content: m.content,
+          memory_type: m.memoryType ?? undefined,
+          categories: m.categories ?? undefined,
+          importance: m.importance ?? undefined,
+          pinned: m.pinned ?? undefined,
+          infer: m.infer ?? undefined,
+          role: m.role ?? undefined,
+          ttl_days: m.ttlDays ?? undefined,
+          event_date: m.eventDate ?? undefined,
+          labels: m.labels ?? undefined,
+        })),
+      },
+      agentId,
+    );
+  }
+
+  /**
+   * PUT /api/memories/:id — update a memory.
    */
   async updateMemory(id: string, params: UpdateMemoryParams, agentId?: string): Promise<boolean> {
-    return this.patch(
+    return this.put(
       `/api/memories/${encodeURIComponent(id)}`,
       {
         content: params.content ?? undefined,
@@ -343,6 +560,7 @@ export class MnemoryClient {
         importance: params.importance ?? undefined,
         pinned: params.pinned ?? undefined,
         ttl_days: params.ttlDays ?? undefined,
+        event_date: params.eventDate ?? undefined,
         labels: params.labels ?? undefined,
       },
       agentId,
@@ -353,7 +571,21 @@ export class MnemoryClient {
    * DELETE /api/memories/:id — delete a memory.
    */
   async deleteMemory(id: string, agentId?: string): Promise<boolean> {
-    return this.delete(`/api/memories/${encodeURIComponent(id)}`, agentId);
+    return this.del(`/api/memories/${encodeURIComponent(id)}`, agentId);
+  }
+
+  /**
+   * POST /api/memories/batch/delete — delete multiple memories in a single call.
+   */
+  async deleteMemoriesBatch(
+    memoryIds: string[],
+    agentId?: string,
+  ): Promise<DeleteMemoriesBatchResponse | null> {
+    return this.post<DeleteMemoriesBatchResponse>(
+      "/api/memories/batch/delete",
+      { memory_ids: memoryIds },
+      agentId,
+    );
   }
 
   /**
@@ -373,8 +605,112 @@ export class MnemoryClient {
         searchParams.append("categories", cat);
       }
     }
+    if (params?.labels) searchParams.set("labels", JSON.stringify(params.labels));
     const qs = searchParams.toString();
     const path = `/api/memories${qs ? `?${qs}` : ""}`;
     return this.get<ListMemoriesResponse>(path, agentId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Public API — Recent / Core
+  // --------------------------------------------------------------------------
+
+  /**
+   * GET /api/memories/recent — get recent memories from the last N days.
+   */
+  async getRecentMemories(
+    params?: GetRecentMemoriesParams,
+    agentId?: string,
+  ): Promise<TextResponse | null> {
+    const searchParams = new URLSearchParams();
+    if (params?.days != null) searchParams.set("days", String(params.days));
+    if (params?.scope) searchParams.set("scope", params.scope);
+    if (params?.limit != null) searchParams.set("limit", String(params.limit));
+    if (params?.includeDecayed) searchParams.set("include_decayed", "true");
+    const qs = searchParams.toString();
+    const path = `/api/memories/recent${qs ? `?${qs}` : ""}`;
+    return this.get<TextResponse>(path, agentId);
+  }
+
+  /**
+   * GET /api/memories/core — load pinned memories and recent context.
+   */
+  async getCoreMemories(recentDays?: number, agentId?: string): Promise<TextResponse | null> {
+    const searchParams = new URLSearchParams();
+    if (recentDays != null) searchParams.set("recent_days", String(recentDays));
+    const qs = searchParams.toString();
+    const path = `/api/memories/core${qs ? `?${qs}` : ""}`;
+    return this.get<TextResponse>(path, agentId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Public API — Categories
+  // --------------------------------------------------------------------------
+
+  /**
+   * GET /api/categories — list all available memory categories.
+   */
+  async listCategories(agentId?: string): Promise<ListCategoriesResponse | null> {
+    return this.get<ListCategoriesResponse>("/api/categories", agentId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Public API — Artifacts
+  // --------------------------------------------------------------------------
+
+  /**
+   * POST /api/memories/:id/artifacts — attach an artifact to a memory.
+   */
+  async saveArtifact(
+    memoryId: string,
+    params: SaveArtifactParams,
+    agentId?: string,
+  ): Promise<ArtifactMetadata | null> {
+    return this.post<ArtifactMetadata>(
+      `/api/memories/${encodeURIComponent(memoryId)}/artifacts`,
+      {
+        content: params.content,
+        filename: params.filename ?? "note.md",
+        content_type: params.contentType ?? "text/markdown",
+      },
+      agentId,
+    );
+  }
+
+  /**
+   * GET /api/memories/:id/artifacts/:aid — retrieve artifact content.
+   */
+  async getArtifact(
+    memoryId: string,
+    artifactId: string,
+    params?: GetArtifactParams,
+    agentId?: string,
+  ): Promise<GetArtifactResponse | null> {
+    const searchParams = new URLSearchParams();
+    if (params?.offset != null) searchParams.set("offset", String(params.offset));
+    if (params?.limit != null) searchParams.set("limit", String(params.limit));
+    const qs = searchParams.toString();
+    const path = `/api/memories/${encodeURIComponent(memoryId)}/artifacts/${encodeURIComponent(artifactId)}${qs ? `?${qs}` : ""}`;
+    return this.get<GetArtifactResponse>(path, agentId);
+  }
+
+  /**
+   * GET /api/memories/:id/artifacts — list all artifacts attached to a memory.
+   */
+  async listArtifacts(memoryId: string, agentId?: string): Promise<ArtifactMetadata[] | null> {
+    return this.get<ArtifactMetadata[]>(
+      `/api/memories/${encodeURIComponent(memoryId)}/artifacts`,
+      agentId,
+    );
+  }
+
+  /**
+   * DELETE /api/memories/:id/artifacts/:aid — delete an artifact.
+   */
+  async deleteArtifact(memoryId: string, artifactId: string, agentId?: string): Promise<boolean> {
+    return this.del(
+      `/api/memories/${encodeURIComponent(memoryId)}/artifacts/${encodeURIComponent(artifactId)}`,
+      agentId,
+    );
   }
 }

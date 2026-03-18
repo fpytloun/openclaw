@@ -483,18 +483,28 @@ describe("mnemory plugin registration", () => {
     };
   }
 
-  test("registers 5 tools with correct names", async () => {
+  test("registers 15 tools with correct names", async () => {
     const { default: mnemoryPlugin } = await import("./index.js");
     const mock = createMockApi();
     mnemoryPlugin.register(mock.api);
 
-    expect(mock.tools).toHaveLength(5);
-    const toolNames = mock.tools.map((t) => t.opts?.name);
+    expect(mock.tools).toHaveLength(15);
+    const toolNames = mock.tools.map((t: { opts?: { name?: string } }) => t.opts?.name);
     expect(toolNames).toContain("memory_search");
+    expect(toolNames).toContain("memory_find");
+    expect(toolNames).toContain("memory_ask");
     expect(toolNames).toContain("memory_add");
+    expect(toolNames).toContain("memory_add_batch");
     expect(toolNames).toContain("memory_update");
     expect(toolNames).toContain("memory_delete");
+    expect(toolNames).toContain("memory_delete_batch");
     expect(toolNames).toContain("memory_list");
+    expect(toolNames).toContain("memory_categories");
+    expect(toolNames).toContain("memory_recent");
+    expect(toolNames).toContain("memory_save_artifact");
+    expect(toolNames).toContain("memory_get_artifact");
+    expect(toolNames).toContain("memory_list_artifacts");
+    expect(toolNames).toContain("memory_delete_artifact");
   });
 
   test("all tools have label and execute function", async () => {

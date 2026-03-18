@@ -11,7 +11,7 @@
 
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/mnemory";
-import { MnemoryClient, type RecallResponse } from "./client.js";
+import { MnemoryClient, type AddMemoriesBatchItem, type RecallResponse } from "./client.js";
 import { mnemoryConfigSchema } from "./config.js";
 
 // ============================================================================
@@ -261,19 +261,47 @@ const mnemoryPlugin = {
               description: "Filter by type: preference, fact, episodic, procedural, context",
             }),
           ),
+          categories: Type.Optional(
+            Type.Array(Type.String(), { description: "Filter by categories" }),
+          ),
+          role: Type.Optional(Type.String({ description: "Filter by role: user or assistant" })),
+          include_decayed: Type.Optional(
+            Type.Boolean({ description: "Include expired/decayed memories (default false)" }),
+          ),
+          date_start: Type.Optional(Type.String({ description: "Filter start date (YYYY-MM-DD)" })),
+          date_end: Type.Optional(Type.String({ description: "Filter end date (YYYY-MM-DD)" })),
         }),
         async execute(_toolCallId, params) {
           const {
             query,
             limit = 10,
             memory_type,
+            categories,
+            role,
+            include_decayed,
+            date_start,
+            date_end,
           } = params as {
             query: string;
             limit?: number;
             memory_type?: string;
+            categories?: string[];
+            role?: string;
+            include_decayed?: boolean;
+            date_start?: string;
+            date_end?: string;
           };
           const result = await client.searchMemories(
-            { query, limit, memoryType: memory_type },
+            {
+              query,
+              limit,
+              memoryType: memory_type,
+              categories,
+              role,
+              includeDecayed: include_decayed,
+              dateStart: date_start,
+              dateEnd: date_end,
+            },
             lastAgentId,
           );
           if (!result) {
@@ -312,6 +340,193 @@ const mnemoryPlugin = {
       { name: "memory_search" },
     );
 
+    // memory_find — AI-powered multi-query search with LLM reranking
+    api.registerTool(
+      {
+        name: "memory_find",
+        label: "Memory Find",
+        description:
+          "Find memories relevant to a complex question using AI-powered search. " +
+          "Generates multiple targeted searches covering different angles and associations, " +
+          "then reranks results by relevance. Slower than memory_search (2 extra LLM calls) " +
+          "but higher quality for complex, multi-faceted questions.",
+        parameters: Type.Object({
+          question: Type.String({ description: "The question in natural language" }),
+          limit: Type.Optional(
+            Type.Number({ description: "Max results (default 10)", minimum: 1, maximum: 100 }),
+          ),
+          memory_type: Type.Optional(
+            Type.String({
+              description: "Filter by type: preference, fact, episodic, procedural, context",
+            }),
+          ),
+          categories: Type.Optional(
+            Type.Array(Type.String(), { description: "Filter by categories" }),
+          ),
+          role: Type.Optional(Type.String({ description: "Filter by role: user or assistant" })),
+          include_decayed: Type.Optional(
+            Type.Boolean({ description: "Include expired/decayed memories (default false)" }),
+          ),
+          context: Type.Optional(
+            Type.String({ description: "Optional context hint for query generation" }),
+          ),
+        }),
+        async execute(_toolCallId, params) {
+          const { question, limit, memory_type, categories, role, include_decayed, context } =
+            params as {
+              question: string;
+              limit?: number;
+              memory_type?: string;
+              categories?: string[];
+              role?: string;
+              include_decayed?: boolean;
+              context?: string;
+            };
+          const result = await client.findMemories(
+            {
+              question,
+              limit,
+              memoryType: memory_type,
+              categories,
+              role,
+              includeDecayed: include_decayed,
+              context,
+            },
+            lastAgentId,
+          );
+          if (!result) {
+            return {
+              content: [
+                { type: "text", text: "Memory find unavailable — mnemory server may be offline." },
+              ],
+              details: {},
+            };
+          }
+          if (result.results.length === 0) {
+            return {
+              content: [{ type: "text", text: "No memories found for your question." }],
+              details: { count: 0 },
+            };
+          }
+          const lines = result.results.map((m, i) => {
+            const score = m.score != null ? ` (${Math.round(m.score * 100)}%)` : "";
+            const type = m.memory_type ? ` [${m.memory_type}]` : "";
+            return `${i + 1}. ${m.memory}${score}${type} (id: ${m.id})`;
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Found ${result.results.length} memories:\n${lines.join("\n")}`,
+              },
+            ],
+            details: { memories: result.results },
+          };
+        },
+      },
+      { name: "memory_find" },
+    );
+
+    // memory_ask — ask a question and get a synthesized answer from memories
+    api.registerTool(
+      {
+        name: "memory_ask",
+        label: "Memory Ask",
+        description:
+          "Ask a question and get a human-readable answer based on stored memories. " +
+          "Uses AI-powered search internally, then generates a natural language answer. " +
+          "Most expensive operation (3 LLM calls). Use when you need a synthesized answer " +
+          "rather than raw memory results.",
+        parameters: Type.Object({
+          question: Type.String({ description: "The question in natural language" }),
+          limit: Type.Optional(
+            Type.Number({
+              description: "Max supporting memories (default 10)",
+              minimum: 1,
+              maximum: 100,
+            }),
+          ),
+          memory_type: Type.Optional(
+            Type.String({
+              description: "Filter by type: preference, fact, episodic, procedural, context",
+            }),
+          ),
+          categories: Type.Optional(
+            Type.Array(Type.String(), { description: "Filter by categories" }),
+          ),
+          role: Type.Optional(Type.String({ description: "Filter by role: user or assistant" })),
+          include_decayed: Type.Optional(
+            Type.Boolean({ description: "Include expired/decayed memories (default false)" }),
+          ),
+          context: Type.Optional(
+            Type.String({ description: "Optional context hint for query generation" }),
+          ),
+          include_memories: Type.Optional(
+            Type.Boolean({
+              description: "Include supporting memories in response (default false)",
+            }),
+          ),
+        }),
+        async execute(_toolCallId, params) {
+          const {
+            question,
+            limit,
+            memory_type,
+            categories,
+            role,
+            include_decayed,
+            context,
+            include_memories,
+          } = params as {
+            question: string;
+            limit?: number;
+            memory_type?: string;
+            categories?: string[];
+            role?: string;
+            include_decayed?: boolean;
+            context?: string;
+            include_memories?: boolean;
+          };
+          const result = await client.askMemories(
+            {
+              question,
+              limit,
+              memoryType: memory_type,
+              categories,
+              role,
+              includeDecayed: include_decayed,
+              context,
+              includeMemories: include_memories,
+            },
+            lastAgentId,
+          );
+          if (!result) {
+            return {
+              content: [
+                { type: "text", text: "Memory ask unavailable — mnemory server may be offline." },
+              ],
+              details: {},
+            };
+          }
+          const parts = [result.answer];
+          if (result.results && result.results.length > 0) {
+            const memLines = result.results.map((m, i) => `${i + 1}. ${m.memory} (id: ${m.id})`);
+            parts.push(`\nSupporting memories:\n${memLines.join("\n")}`);
+          }
+          return {
+            content: [{ type: "text", text: parts.join("\n") }],
+            details: {
+              answer: result.answer,
+              count: result.count,
+              queries: result.queries,
+              memories: result.results,
+            },
+          };
+        },
+      },
+      { name: "memory_ask" },
+    );
+
     // memory_add — store a new memory
     api.registerTool(
       {
@@ -335,16 +550,51 @@ const mnemoryPlugin = {
                 "Tags: personal, preferences, health, work, technical, finance, home, vehicles, travel, entertainment, goals, decisions, project",
             }),
           ),
+          pinned: Type.Optional(
+            Type.Boolean({ description: "Pin this memory (loaded at every conversation start)" }),
+          ),
+          infer: Type.Optional(
+            Type.Boolean({
+              description:
+                "Extract facts and dedup (default true). Set false to store content verbatim.",
+            }),
+          ),
+          role: Type.Optional(
+            Type.String({
+              description:
+                "Who the memory is about: user (default) or assistant (requires agent_id)",
+            }),
+          ),
+          ttl_days: Type.Optional(
+            Type.Number({
+              description: "Time-to-live in days. Omit for type defaults.",
+              minimum: 1,
+            }),
+          ),
         }),
         async execute(_toolCallId, params) {
-          const { content, memory_type, importance, categories } = params as {
-            content: string;
-            memory_type?: string;
-            importance?: string;
-            categories?: string[];
-          };
+          const { content, memory_type, importance, categories, pinned, infer, role, ttl_days } =
+            params as {
+              content: string;
+              memory_type?: string;
+              importance?: string;
+              categories?: string[];
+              pinned?: boolean;
+              infer?: boolean;
+              role?: string;
+              ttl_days?: number;
+            };
           const result = await client.addMemory(
-            { content, memoryType: memory_type, importance, categories },
+            {
+              content,
+              memoryType: memory_type,
+              importance,
+              categories,
+              pinned,
+              infer,
+              role,
+              ttlDays: ttl_days,
+            },
             lastAgentId,
           );
           if (!result) {
@@ -390,6 +640,72 @@ const mnemoryPlugin = {
       { name: "memory_add" },
     );
 
+    // memory_add_batch — store multiple memories in a single call
+    api.registerTool(
+      {
+        name: "memory_add_batch",
+        label: "Memory Add Batch",
+        description:
+          "Store multiple memories in a single call. Each memory is processed independently — " +
+          "failures on individual items do not block the rest.",
+        parameters: Type.Object({
+          memories: Type.Array(
+            Type.Object({
+              content: Type.String({ description: "Memory content (max 1000 chars)" }),
+              memory_type: Type.Optional(
+                Type.String({
+                  description: "Type: preference, fact, episodic, procedural, context",
+                }),
+              ),
+              importance: Type.Optional(
+                Type.String({ description: "Importance: low, normal, high, critical" }),
+              ),
+              categories: Type.Optional(Type.Array(Type.String())),
+            }),
+            { description: "List of memories to store" },
+          ),
+        }),
+        async execute(_toolCallId, params) {
+          const { memories } = params as {
+            memories: Array<{
+              content: string;
+              memory_type?: string;
+              importance?: string;
+              categories?: string[];
+            }>;
+          };
+          const items: AddMemoriesBatchItem[] = memories.map((m) => ({
+            content: m.content,
+            memoryType: m.memory_type,
+            importance: m.importance,
+            categories: m.categories,
+          }));
+          const result = await client.addMemoriesBatch(items, lastAgentId);
+          if (!result) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Failed to store memories — mnemory server may be offline.",
+                },
+              ],
+              details: {},
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Batch add: ${result.succeeded}/${result.total} succeeded, ${result.failed} failed.`,
+              },
+            ],
+            details: { results: result.results, errors: result.errors },
+          };
+        },
+      },
+      { name: "memory_add_batch" },
+    );
+
     // memory_update — update an existing memory
     api.registerTool(
       {
@@ -407,17 +723,35 @@ const mnemoryPlugin = {
           importance: Type.Optional(
             Type.String({ description: "New importance: low, normal, high, critical" }),
           ),
+          categories: Type.Optional(
+            Type.Array(Type.String(), { description: "New categories (replaces existing)" }),
+          ),
+          pinned: Type.Optional(Type.Boolean({ description: "New pinned state" })),
+          ttl_days: Type.Optional(
+            Type.Number({ description: "New TTL in days. Restores decayed memories.", minimum: 1 }),
+          ),
         }),
         async execute(_toolCallId, params) {
-          const { memory_id, content, memory_type, importance } = params as {
-            memory_id: string;
-            content?: string;
-            memory_type?: string;
-            importance?: string;
-          };
+          const { memory_id, content, memory_type, importance, categories, pinned, ttl_days } =
+            params as {
+              memory_id: string;
+              content?: string;
+              memory_type?: string;
+              importance?: string;
+              categories?: string[];
+              pinned?: boolean;
+              ttl_days?: number;
+            };
           const ok = await client.updateMemory(
             memory_id,
-            { content, memoryType: memory_type, importance },
+            {
+              content,
+              memoryType: memory_type,
+              importance,
+              categories,
+              pinned,
+              ttlDays: ttl_days,
+            },
             lastAgentId,
           );
           return {
@@ -464,6 +798,45 @@ const mnemoryPlugin = {
       { name: "memory_delete" },
     );
 
+    // memory_delete_batch — delete multiple memories in a single call
+    api.registerTool(
+      {
+        name: "memory_delete_batch",
+        label: "Memory Delete Batch",
+        description: "Delete multiple memories in a single call.",
+        parameters: Type.Object({
+          memory_ids: Type.Array(Type.String(), {
+            description: "List of memory IDs to delete",
+          }),
+        }),
+        async execute(_toolCallId, params) {
+          const { memory_ids } = params as { memory_ids: string[] };
+          const result = await client.deleteMemoriesBatch(memory_ids, lastAgentId);
+          if (!result) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Failed to delete memories — mnemory server may be offline.",
+                },
+              ],
+              details: {},
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Batch delete: ${result.succeeded}/${result.total} succeeded, ${result.failed} failed.`,
+              },
+            ],
+            details: { results: result.results, errors: result.errors },
+          };
+        },
+      },
+      { name: "memory_delete_batch" },
+    );
+
     // memory_list — list memories with optional filters
     api.registerTool(
       {
@@ -479,13 +852,38 @@ const mnemoryPlugin = {
           limit: Type.Optional(
             Type.Number({ description: "Max results (default 20)", minimum: 1, maximum: 100 }),
           ),
+          categories: Type.Optional(
+            Type.Array(Type.String(), { description: "Filter by categories" }),
+          ),
+          role: Type.Optional(Type.String({ description: "Filter by role: user or assistant" })),
+          include_decayed: Type.Optional(
+            Type.Boolean({ description: "Include expired/decayed memories (default false)" }),
+          ),
         }),
         async execute(_toolCallId, params) {
-          const { memory_type, limit = 20 } = params as {
+          const {
+            memory_type,
+            limit = 20,
+            categories,
+            role,
+            include_decayed,
+          } = params as {
             memory_type?: string;
             limit?: number;
+            categories?: string[];
+            role?: string;
+            include_decayed?: boolean;
           };
-          const result = await client.listMemories({ memoryType: memory_type, limit }, lastAgentId);
+          const result = await client.listMemories(
+            {
+              memoryType: memory_type,
+              limit,
+              categories,
+              role,
+              includeDecayed: include_decayed,
+            },
+            lastAgentId,
+          );
           if (!result) {
             return {
               content: [
@@ -517,6 +915,286 @@ const mnemoryPlugin = {
         },
       },
       { name: "memory_list" },
+    );
+
+    // memory_categories — list available memory categories
+    api.registerTool(
+      {
+        name: "memory_categories",
+        label: "Memory Categories",
+        description:
+          "List all available memory categories with descriptions and counts. " +
+          "Categories are predefined — do not invent new ones.",
+        parameters: Type.Object({}),
+        async execute() {
+          const result = await client.listCategories(lastAgentId);
+          if (!result) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Categories unavailable — mnemory server may be offline.",
+                },
+              ],
+              details: {},
+            };
+          }
+          const lines = result.categories.map((c) => {
+            const desc = c.description ? ` — ${c.description}` : "";
+            return `- ${c.name} (${c.count})${desc}`;
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Available categories:\n${lines.join("\n")}`,
+              },
+            ],
+            details: { categories: result.categories },
+          };
+        },
+      },
+      { name: "memory_categories" },
+    );
+
+    // memory_recent — get recent memories from the last N days
+    api.registerTool(
+      {
+        name: "memory_recent",
+        label: "Memory Recent",
+        description: "Get recent memories from the last N days, ordered by most recent first.",
+        parameters: Type.Object({
+          days: Type.Optional(
+            Type.Number({ description: "How many days back to look (default 7)", minimum: 1 }),
+          ),
+          scope: Type.Optional(
+            Type.String({ description: "Scope: all (default), user, or agent" }),
+          ),
+          limit: Type.Optional(
+            Type.Number({ description: "Max results (default 25)", minimum: 1, maximum: 100 }),
+          ),
+          include_decayed: Type.Optional(
+            Type.Boolean({ description: "Include expired memories (default false)" }),
+          ),
+        }),
+        async execute(_toolCallId, params) {
+          const { days, scope, limit, include_decayed } = params as {
+            days?: number;
+            scope?: string;
+            limit?: number;
+            include_decayed?: boolean;
+          };
+          const result = await client.getRecentMemories(
+            { days, scope, limit, includeDecayed: include_decayed },
+            lastAgentId,
+          );
+          if (!result) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Recent memories unavailable — mnemory server may be offline.",
+                },
+              ],
+              details: {},
+            };
+          }
+          return {
+            content: [{ type: "text", text: result.text || "No recent memories found." }],
+            details: {},
+          };
+        },
+      },
+      { name: "memory_recent" },
+    );
+
+    // memory_save_artifact — attach an artifact to a memory
+    api.registerTool(
+      {
+        name: "memory_save_artifact",
+        label: "Memory Save Artifact",
+        description:
+          "Attach an artifact to a memory (slow memory tier). Use for detailed content " +
+          "too long for fast memory — research reports, analysis, logs, notes, code, data.",
+        parameters: Type.Object({
+          memory_id: Type.String({ description: "ID of the parent memory" }),
+          content: Type.String({
+            description: "Text content or base64-encoded binary content",
+          }),
+          filename: Type.Optional(
+            Type.String({ description: "Name for the artifact (default: note.md)" }),
+          ),
+          content_type: Type.Optional(
+            Type.String({ description: "MIME type (default: text/markdown)" }),
+          ),
+        }),
+        async execute(_toolCallId, params) {
+          const { memory_id, content, filename, content_type } = params as {
+            memory_id: string;
+            content: string;
+            filename?: string;
+            content_type?: string;
+          };
+          const result = await client.saveArtifact(
+            memory_id,
+            { content, filename, contentType: content_type },
+            lastAgentId,
+          );
+          if (!result) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Failed to save artifact — mnemory server may be offline.",
+                },
+              ],
+              details: {},
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Artifact saved: ${result.filename} (${result.size} bytes, id: ${result.id})`,
+              },
+            ],
+            details: { artifact: result },
+          };
+        },
+      },
+      { name: "memory_save_artifact" },
+    );
+
+    // memory_get_artifact — retrieve artifact content
+    api.registerTool(
+      {
+        name: "memory_get_artifact",
+        label: "Memory Get Artifact",
+        description:
+          "Retrieve artifact content attached to a memory. Text artifacts support pagination.",
+        parameters: Type.Object({
+          memory_id: Type.String({ description: "ID of the parent memory" }),
+          artifact_id: Type.String({ description: "ID of the artifact to retrieve" }),
+          offset: Type.Optional(
+            Type.Number({ description: "Character offset for text (default 0)", minimum: 0 }),
+          ),
+          limit: Type.Optional(
+            Type.Number({
+              description: "Max characters for text (default 5000)",
+              minimum: 1,
+            }),
+          ),
+        }),
+        async execute(_toolCallId, params) {
+          const { memory_id, artifact_id, offset, limit } = params as {
+            memory_id: string;
+            artifact_id: string;
+            offset?: number;
+            limit?: number;
+          };
+          const result = await client.getArtifact(
+            memory_id,
+            artifact_id,
+            { offset, limit },
+            lastAgentId,
+          );
+          if (!result) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Failed to get artifact — mnemory server may be offline.",
+                },
+              ],
+              details: {},
+            };
+          }
+          const more = result.has_more ? `\n(truncated — ${result.total_size} total bytes)` : "";
+          return {
+            content: [{ type: "text", text: `${result.content}${more}` }],
+            details: { total_size: result.total_size, has_more: result.has_more },
+          };
+        },
+      },
+      { name: "memory_get_artifact" },
+    );
+
+    // memory_list_artifacts — list all artifacts attached to a memory
+    api.registerTool(
+      {
+        name: "memory_list_artifacts",
+        label: "Memory List Artifacts",
+        description: "List all artifacts attached to a memory.",
+        parameters: Type.Object({
+          memory_id: Type.String({ description: "ID of the parent memory" }),
+        }),
+        async execute(_toolCallId, params) {
+          const { memory_id } = params as { memory_id: string };
+          const result = await client.listArtifacts(memory_id, lastAgentId);
+          if (!result) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Failed to list artifacts — mnemory server may be offline.",
+                },
+              ],
+              details: {},
+            };
+          }
+          if (result.length === 0) {
+            return {
+              content: [{ type: "text", text: "No artifacts found for this memory." }],
+              details: { count: 0 },
+            };
+          }
+          const lines = result.map(
+            (a, i) => `${i + 1}. ${a.filename} (${a.content_type}, ${a.size} bytes, id: ${a.id})`,
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${result.length} artifact(s):\n${lines.join("\n")}`,
+              },
+            ],
+            details: { artifacts: result },
+          };
+        },
+      },
+      { name: "memory_list_artifacts" },
+    );
+
+    // memory_delete_artifact — delete an artifact from a memory
+    api.registerTool(
+      {
+        name: "memory_delete_artifact",
+        label: "Memory Delete Artifact",
+        description: "Delete an artifact from a memory.",
+        parameters: Type.Object({
+          memory_id: Type.String({ description: "ID of the parent memory" }),
+          artifact_id: Type.String({ description: "ID of the artifact to delete" }),
+        }),
+        async execute(_toolCallId, params) {
+          const { memory_id, artifact_id } = params as {
+            memory_id: string;
+            artifact_id: string;
+          };
+          const ok = await client.deleteArtifact(memory_id, artifact_id, lastAgentId);
+          return {
+            content: [
+              {
+                type: "text",
+                text: ok
+                  ? `Artifact ${artifact_id} deleted successfully.`
+                  : `Failed to delete artifact ${artifact_id} — mnemory server may be offline.`,
+              },
+            ],
+            details: { success: ok },
+          };
+        },
+      },
+      { name: "memory_delete_artifact" },
     );
 
     // ========================================================================

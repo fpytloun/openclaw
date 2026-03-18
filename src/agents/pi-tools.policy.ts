@@ -60,6 +60,13 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   // Memory - pass relevant info in spawn prompt instead
   "memory_search",
   "memory_get",
+  "memory_add",
+  "memory_add_batch",
+  "memory_update",
+  "memory_delete",
+  "memory_delete_batch",
+  "memory_save_artifact",
+  "memory_delete_artifact",
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
 ];
