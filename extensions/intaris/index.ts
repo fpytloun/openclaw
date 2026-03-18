@@ -755,6 +755,16 @@ const intarisPlugin = {
       const texts = event.assistantTexts;
       if (texts && texts.length > 0) {
         state.lastAssistantText = texts[texts.length - 1];
+
+        // Record assistant message for session recording
+        recordEvent(sessionKey, {
+          type: "message",
+          data: {
+            role: "assistant",
+            text: state.lastAssistantText,
+            sessionKey,
+          },
+        });
       }
     });
 
