@@ -122,16 +122,28 @@ For sandboxed sessions, add memory tools to the sandbox allow list:
 
 ## Configuration
 
-| Key                        | Env var           | Required | Default | Description                                              |
-| -------------------------- | ----------------- | -------- | ------- | -------------------------------------------------------- |
-| `mnemory.url`              | `MNEMORY_URL`     | Yes      |         | Mnemory server URL                                       |
-| `mnemory.apiKey`           | `MNEMORY_API_KEY` | No       |         | API key for authentication                               |
-| `mnemory.userId`           | `MNEMORY_USER_ID` | No       |         | User ID for memory scoping                               |
-| `mnemory.autoRecall`       |                   | No       | `true`  | Inject relevant memories before each agent turn          |
-| `mnemory.autoCapture`      |                   | No       | `true`  | Extract and store memories after conversations           |
-| `mnemory.scoreThreshold`   |                   | No       | `0.5`   | Minimum similarity score for recalled memories           |
-| `mnemory.includeAssistant` |                   | No       | `false` | Include assistant messages in auto-capture               |
-| `mnemory.managed`          |                   | No       | `true`  | Include mnemory behavioral instructions in system prompt |
+| Key                        | Env var                | Required | Default      | Description                                              |
+| -------------------------- | ---------------------- | -------- | ------------ | -------------------------------------------------------- |
+| `mnemory.url`              | `MNEMORY_URL`          | Yes      |              | Mnemory server URL                                       |
+| `mnemory.apiKey`           | `MNEMORY_API_KEY`      | No       |              | API key for authentication                               |
+| `mnemory.userId`           | `MNEMORY_USER_ID`      | No       |              | User ID for memory scoping                               |
+| `mnemory.agentPrefix`      | `MNEMORY_AGENT_PREFIX` | No       | `"openclaw"` | Prefix for agent IDs (see below)                         |
+| `mnemory.autoRecall`       |                        | No       | `true`       | Inject relevant memories before each agent turn          |
+| `mnemory.autoCapture`      |                        | No       | `true`       | Extract and store memories after conversations           |
+| `mnemory.scoreThreshold`   |                        | No       | `0.5`        | Minimum similarity score for recalled memories           |
+| `mnemory.includeAssistant` |                        | No       | `false`      | Include assistant messages in auto-capture               |
+| `mnemory.managed`          |                        | No       | `true`       | Include mnemory behavioral instructions in system prompt |
+
+### Agent ID prefix
+
+The `agentPrefix` option namespaces openclaw agent IDs to avoid collisions with other integrations that share the same mnemory server. With the default prefix `"openclaw"`, agent IDs are sent as:
+
+- `main` agent -> `openclaw:main`
+- `leoben` agent -> `openclaw:leoben`
+
+This maps to mnemory's sub-agent model: configure the mnemory API key for agent_id `"openclaw"`, which grants access to the parent agent and all sub-agents matching `openclaw:*`.
+
+Set `agentPrefix` to `""` (empty string) to send raw openclaw agent IDs without a prefix.
 
 ## Subagent restrictions
 

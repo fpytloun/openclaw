@@ -199,14 +199,15 @@ const mnemoryPlugin = {
     });
     const store = createSessionStore();
 
-    // Track the agent ID from hook context so tools can use it
-    let lastAgentId = "openclaw";
+    // Track the agent ID from hook context so tools can use it.
+    // The prefix (default "openclaw") namespaces agent IDs to avoid
+    // collisions with other integrations (e.g., "main" → "openclaw:main").
+    let lastAgentId = cfg.agentPrefix || "openclaw";
 
-    // Helper: resolve the agent ID from hook context
+    // Helper: resolve the agent ID from hook context, applying the prefix
     const resolveAgentId = (ctx: { agentId?: string }): string => {
-      if (ctx.agentId) {
-        lastAgentId = ctx.agentId;
-      }
+      const rawId = ctx.agentId || "main";
+      lastAgentId = cfg.agentPrefix ? `${cfg.agentPrefix}:${rawId}` : rawId;
       return lastAgentId;
     };
 

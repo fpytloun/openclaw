@@ -13,6 +13,10 @@ export type MnemoryConfig = {
   apiKey: string;
   /** User ID sent as X-User-Id header. Required when the API key is a wildcard or auth is disabled. */
   userId: string;
+  /** Prefix for agent IDs sent as X-Agent-Id header. Default: "openclaw".
+   *  Produces agent IDs like "openclaw:main", "openclaw:leoben".
+   *  Set to "" to send raw openclaw agent IDs without prefix. */
+  agentPrefix: string;
   /** Automatically inject relevant memories into context. Default: true. */
   autoRecall: boolean;
   /** Automatically extract and store memories from conversations. Default: true. */
@@ -83,6 +87,17 @@ export const mnemoryConfigSchema = {
       }
     }
 
+    // agentPrefix — default "openclaw", supports ${ENV_VAR}
+    let agentPrefix = "openclaw";
+    if (typeof raw.agentPrefix === "string") {
+      agentPrefix = raw.agentPrefix.length > 0 ? resolveEnvVar(raw.agentPrefix) : "";
+    } else {
+      const envPrefix = process.env.MNEMORY_AGENT_PREFIX;
+      if (envPrefix !== undefined) {
+        agentPrefix = envPrefix;
+      }
+    }
+
     // autoRecall — default true
     const autoRecall = typeof raw.autoRecall === "boolean" ? raw.autoRecall : true;
 
@@ -110,6 +125,7 @@ export const mnemoryConfigSchema = {
       "url",
       "apiKey",
       "userId",
+      "agentPrefix",
       "autoRecall",
       "autoCapture",
       "scoreThreshold",
@@ -126,6 +142,7 @@ export const mnemoryConfigSchema = {
       url: url as string,
       apiKey,
       userId,
+      agentPrefix,
       autoRecall,
       autoCapture,
       scoreThreshold,
