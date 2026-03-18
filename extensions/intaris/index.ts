@@ -644,8 +644,8 @@ const intarisPlugin = {
     });
 
     // -- session_start: Create Intaris session --------------------------------
-    api.on("session_start", async (event, ctx) => {
-      const sessionKey = ctx.sessionKey || event.sessionId;
+    api.on("session_start", async (_event, ctx) => {
+      const sessionKey = ctx.sessionKey;
       if (!sessionKey) return;
 
       const state = getOrCreateState(sessionKey);
