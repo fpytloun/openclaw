@@ -162,6 +162,35 @@ function buildPolicy(allowPaths: string): Record<string, unknown> | null {
 }
 
 // ============================================================================
+// Module-level session state
+// ============================================================================
+
+// Shared across plugin instances. The plugin may be loaded multiple times
+// (gateway startup vs agent run) with different workspaceDir values, causing
+// separate register() calls. Sharing the sessions map prevents duplicate
+// Intaris session creation.
+const sessions = new Map<string, SessionState>();
+
+function getOrCreateState(sessionKey: string): SessionState {
+  let state = sessions.get(sessionKey);
+  if (!state) {
+    state = createSessionState();
+    sessions.set(sessionKey, state);
+    // Evict oldest entries if over limit
+    if (sessions.size > MAX_SESSIONS) {
+      const excess = sessions.size - MAX_SESSIONS;
+      let count = 0;
+      for (const key of sessions.keys()) {
+        if (count >= excess) break;
+        sessions.delete(key);
+        count++;
+      }
+    }
+  }
+  return state;
+}
+
+// ============================================================================
 // Plugin Definition
 // ============================================================================
 
@@ -182,29 +211,6 @@ const intarisPlugin = {
       api.logger[level](`[intaris] ${message}${suffix}`);
     };
     const client = new IntarisClient(cfg, log);
-
-    // -- State --------------------------------------------------------------
-    // Per-session state, bounded to prevent unbounded growth.
-    const sessions = new Map<string, SessionState>();
-
-    function getOrCreateState(sessionKey: string): SessionState {
-      let state = sessions.get(sessionKey);
-      if (!state) {
-        state = createSessionState();
-        sessions.set(sessionKey, state);
-        // Evict oldest entries if over limit
-        if (sessions.size > MAX_SESSIONS) {
-          const excess = sessions.size - MAX_SESSIONS;
-          let count = 0;
-          for (const key of sessions.keys()) {
-            if (count >= excess) break;
-            sessions.delete(key);
-            count++;
-          }
-        }
-      }
-      return state;
-    }
 
     // -- Intention Helpers ---------------------------------------------------
 
