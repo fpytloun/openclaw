@@ -213,6 +213,32 @@ const intarisPlugin = {
       return details;
     }
 
+    /**
+     * Strip OpenClaw inbound metadata prefix blocks from user message text
+     * for clean session recording. The metadata (sender info, conversation
+     * info) is extracted separately so it's available for audit without
+     * cluttering the Console view.
+     */
+    function stripRecordingMetadata(text: string): { clean: string; sender?: string } {
+      const metaBlockRe =
+        /(?:Conversation info|Sender) \(untrusted metadata\):\n```json\n[\s\S]*?```\n*/g;
+      const clean = text.replace(metaBlockRe, "").trim();
+
+      // Extract sender name from the Sender metadata block.
+      const senderMatch = text.match(/Sender \(untrusted metadata\):\n```json\n([\s\S]*?)```/);
+      let sender: string | undefined;
+      if (senderMatch) {
+        try {
+          const parsed = JSON.parse(senderMatch[1]);
+          sender = parsed.name || parsed.label || parsed.id;
+        } catch {
+          // Malformed JSON — skip sender extraction.
+        }
+      }
+
+      return { clean: clean || text, sender };
+    }
+
     function buildCheckpointContent(state: SessionState): string {
       const interval =
         cfg.checkpointInterval > 0 ? Math.floor(state.callCount / cfg.checkpointInterval) : 0;
@@ -632,12 +658,17 @@ const intarisPlugin = {
       // server waits for the /reasoning call to arrive before evaluating.
       stateRef.intentionPending = true;
 
-      // Record user message for session recording
+      // Record user message for session recording.
+      // Strip inbound metadata (sender/conversation info) from the recorded
+      // text so the Console view shows clean messages. The sender is stored
+      // as a separate field for audit visibility.
+      const { clean: cleanUserText, sender: userSender } = stripRecordingMetadata(content);
       recordEvent(sessionKey, {
         type: "message",
         data: {
           role: "user",
-          text: content,
+          text: cleanUserText,
+          sender: userSender,
           sessionKey,
         },
       });
