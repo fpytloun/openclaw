@@ -1253,23 +1253,31 @@ const mnemoryPlugin = {
         };
       });
 
-      // Re-fetch memories after compaction (old cached result may be stale)
-      api.on("after_compaction", (_event, ctx) => {
+      // Re-fetch memories after compaction and reset auto-capture tracking.
+      // The message array shrinks after compaction, so lastMessageCount must
+      // be reset to avoid extractLastExchange slicing past the end.
+      api.on("after_compaction", (event, ctx) => {
         const sessionKey = ctx.sessionKey;
         if (!sessionKey) return;
         const agentId = resolveAgentId(ctx);
         const state = store.getOrCreate(sessionKey);
+        const afterEvent = event as { messageCount?: number };
+        state.lastMessageCount = afterEvent.messageCount ?? 0;
         startRecall(state, agentId);
       });
 
-      // Mark session state before compaction so after_compaction re-fetches
+      // Reset session state before compaction so after_compaction gets a fresh
+      // mnemory session with core memories re-loaded and dedup tracking reset.
       api.on("before_compaction", (_event, ctx) => {
         const sessionKey = ctx.sessionKey;
         if (!sessionKey) return;
         const state = store.getOrCreate(sessionKey);
-        // Clear cached result so after_compaction triggers a fresh recall
         state.recallResult = null;
         state.recallPromise = null;
+        // Force a fresh mnemory session — the old one tracked which memories
+        // were already sent, but after compaction the agent's context is wiped
+        // so core memories and previously recalled memories must be re-injected.
+        state.mnemorySessionId = null;
       });
     }
 
