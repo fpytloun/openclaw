@@ -27,6 +27,7 @@
  *   escalationTimeout / INTARIS_ESCALATION_TIMEOUT - Max seconds to wait for escalation (default: 0 = no timeout)
  *   checkpointInterval / INTARIS_CHECKPOINT_INTERVAL - Evaluate calls between checkpoints (default: 25, 0 = disabled)
  *   recording / INTARIS_SESSION_RECORDING       - Enable session recording (default: false)
+ *   recordToolOutput / INTARIS_RECORD_TOOL_OUTPUT - Record full tool output in events (default: follows recording)
  *   recordingFlushSize / INTARIS_RECORDING_FLUSH_SIZE - Events per recording batch (default: 50)
  *   recordingFlushMs / INTARIS_RECORDING_FLUSH_MS     - Recording flush interval in ms (default: 10000)
  *   mcpTools / INTARIS_MCP_TOOLS                      - Enable MCP tool proxy (default: true)
@@ -89,6 +90,18 @@ function resolveConfig(pluginConfig?: Record<string, unknown>): IntarisConfig {
     recording:
       cfg.recording === true ||
       (process.env.INTARIS_SESSION_RECORDING || "false").toLowerCase() === "true",
+    recordToolOutput:
+      cfg.recordToolOutput === false
+        ? false
+        : cfg.recordToolOutput === true ||
+          (
+            process.env.INTARIS_RECORD_TOOL_OUTPUT ||
+            // Default: follows recording setting
+            String(
+              cfg.recording === true ||
+                (process.env.INTARIS_SESSION_RECORDING || "false").toLowerCase() === "true",
+            )
+          ).toLowerCase() === "true",
     recordingFlushSize: isNaN(rawRecordingFlushSize) ? 50 : rawRecordingFlushSize,
     recordingFlushMs: isNaN(rawRecordingFlushMs) ? 10000 : rawRecordingFlushMs,
     mcpTools:
@@ -237,6 +250,22 @@ const intarisPlugin = {
       }
 
       return { clean: clean || text, sender };
+    }
+
+    /**
+     * Extract text content from a tool result for session recording.
+     * Tool results follow the AgentToolResult shape:
+     * `{ content: [{ type: "text", text: "..." }, ...], details: ... }`
+     */
+    function extractToolOutput(result: unknown): string | undefined {
+      if (!result || typeof result !== "object") return undefined;
+      const r = result as { content?: Array<{ type?: string; text?: string }> };
+      if (!Array.isArray(r.content)) return undefined;
+      const text = r.content
+        .filter((c) => c.type === "text" && c.text)
+        .map((c) => c.text)
+        .join("\n");
+      return text || undefined;
     }
 
     function buildCheckpointContent(state: SessionState): string {
@@ -978,6 +1007,9 @@ const intarisPlugin = {
           sessionKey,
           error: event.error,
           durationMs: event.durationMs,
+          ...(cfg.recordToolOutput && event.result
+            ? { output: extractToolOutput(event.result) }
+            : {}),
         },
       });
     });

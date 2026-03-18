@@ -15,6 +15,8 @@ export interface IntarisConfig {
   recording: boolean;
   recordingFlushSize: number;
   recordingFlushMs: number;
+  /** Record full tool output in session recording events (default: follows `recording`). */
+  recordToolOutput: boolean;
   /** Enable MCP tool proxy — fetches tools from Intaris MCP servers and registers them as agent tools. */
   mcpTools: boolean;
   /** Cache TTL for the MCP tool list in milliseconds (default: 900000 = 15 min). */
