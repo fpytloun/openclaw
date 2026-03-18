@@ -218,11 +218,15 @@ const intarisPlugin = {
       agentId?: string;
       workspaceDir?: string;
       channelId?: string;
+      sessionKey?: string;
+      trigger?: string;
     }): Record<string, unknown> {
       const details: Record<string, unknown> = { source: "openclaw" };
       if (ctx.workspaceDir) details.working_directory = ctx.workspaceDir;
       if (ctx.agentId) details.agent_id = ctx.agentId;
       if (ctx.channelId) details.channel = ctx.channelId;
+      if (ctx.sessionKey) details.session_key = ctx.sessionKey;
+      if (ctx.trigger) details.trigger = ctx.trigger;
       return details;
     }
 
@@ -302,7 +306,13 @@ const intarisPlugin = {
     async function ensureSession(
       sessionKey: string,
       state: SessionState,
-      ctx: { agentId?: string; workspaceDir?: string; channelId?: string },
+      ctx: {
+        agentId?: string;
+        workspaceDir?: string;
+        channelId?: string;
+        sessionKey?: string;
+        trigger?: string;
+      },
     ): Promise<string | null> {
       if (state.intarisSessionId) return state.intarisSessionId;
 
