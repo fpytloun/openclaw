@@ -7,6 +7,7 @@
  *
  * Flow:
  * 1. session_start: Creates an Intaris session via POST /api/v1/intention
+ * 1a. subagent_spawning: Links child Intaris session to parent (pre-spawn)
  * 1b. before_reset: Closes the Intaris session when user sends /new or /reset
  * 2. before_agent_start: Forwards user prompt as reasoning context
  * 3. before_tool_call: Evaluates every tool call via POST /api/v1/evaluate
@@ -16,6 +17,7 @@
  * 4. after_tool_call: Records tool results for audit trail
  * 5. agent_end: Sends periodic checkpoints with session statistics
  * 6. session_end: Signals session completion to Intaris
+ * 6a. subagent_ended: Completes child Intaris session when sub-agent ends
  *
  * Configuration via plugin config or environment variables:
  *   url / INTARIS_URL                          - Intaris server URL (default: http://localhost:8060)
@@ -326,15 +328,25 @@ const intarisPlugin = {
         // or /new / /reset gets a fresh session — no resume-on-reconnect.
         const intarisSessionId = `oc-${crypto.randomUUID()}`;
         const intention = buildIntention(ctx);
-        const details = buildDetails(ctx);
+        const details: Record<string, unknown> = buildDetails(ctx);
         const policy = buildPolicy(cfg.allowPaths);
+
+        // Enrich details with sub-agent metadata when available.
+        if (state.parentIntarisSessionId) {
+          details.subagent = true;
+          if (state.subagentLabel) details.subagent_label = state.subagentLabel;
+          if (state.subagentMode) details.subagent_mode = state.subagentMode;
+          // Compute depth from session key (count ":subagent:" segments).
+          const depth = (ctx.sessionKey || "").split(":subagent:").length - 1;
+          if (depth > 0) details.subagent_depth = depth;
+        }
 
         const { data, error, status } = await client.createIntention(
           intarisSessionId,
           intention,
           details,
           policy,
-          null, // no parent session tracking for now
+          state.parentIntarisSessionId || null,
           ctx.agentId,
         );
 
@@ -644,6 +656,43 @@ const intarisPlugin = {
       if (cfg.mcpTools && isMcpCacheStale()) {
         refreshMcpToolCache(ctx.agentId).catch(() => {});
       }
+    });
+
+    // -- subagent_spawning: Link child Intaris session to parent ----------------
+    // Fires BEFORE the child session starts, so we can pre-populate the
+    // child's state with the parent Intaris session ID. When session_start
+    // fires for the child and calls ensureSession, it will pass the
+    // parent_session_id to the Intaris backend.
+    api.on("subagent_spawning", async (event, ctx) => {
+      const childKey = event.childSessionKey;
+      if (!childKey) return { status: "ok" as const };
+
+      const requesterKey = ctx.requesterSessionKey;
+      const parentState = requesterKey ? sessions.get(requesterKey) : undefined;
+
+      const childState = getOrCreateState(childKey);
+      if (parentState?.intarisSessionId) {
+        childState.parentIntarisSessionId = parentState.intarisSessionId;
+        log("info", `Sub-agent ${childKey}: linked to parent ${parentState.intarisSessionId}`);
+      }
+      // Store sub-agent metadata for session details enrichment.
+      if (event.label) childState.subagentLabel = event.label;
+      if (event.mode) childState.subagentMode = event.mode;
+
+      return { status: "ok" as const };
+    });
+
+    // -- subagent_ended: Complete child Intaris session -------------------------
+    api.on("subagent_ended", async (event) => {
+      const sessionKey = event.targetSessionKey;
+      if (!sessionKey) return;
+
+      const state = sessions.get(sessionKey);
+      if (!state?.intarisSessionId) return;
+
+      log("info", `Sub-agent ${sessionKey}: ended (${event.outcome || event.reason})`);
+      signalCompletion(state, sessionKey, {});
+      sessions.delete(sessionKey);
     });
 
     // -- before_reset: User sent /new or /reset — close current Intaris session

@@ -129,4 +129,10 @@ export interface SessionState {
   lastAssistantText: string;
   /** In-flight session creation promise (prevents duplicate creation). */
   creating?: Promise<string | null>;
+  /** Parent Intaris session ID for sub-agent sessions. */
+  parentIntarisSessionId?: string;
+  /** Sub-agent label (e.g. "research", "code-review"). */
+  subagentLabel?: string;
+  /** Sub-agent spawn mode ("run" = one-shot, "session" = persistent). */
+  subagentMode?: string;
 }
