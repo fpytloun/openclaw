@@ -133,6 +133,7 @@ For sandboxed sessions, add memory tools to the sandbox allow list:
 | `mnemory.scoreThreshold`   |                        | No       | `0.5`        | Minimum similarity score for recalled memories           |
 | `mnemory.includeAssistant` |                        | No       | `false`      | Include assistant messages in auto-capture               |
 | `mnemory.managed`          |                        | No       | `true`       | Include mnemory behavioral instructions in system prompt |
+| `mnemory.timeout`          | `MNEMORY_TIMEOUT`      | No       | `60000`      | HTTP request timeout in milliseconds                     |
 
 ### Agent ID prefix
 

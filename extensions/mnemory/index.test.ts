@@ -24,6 +24,7 @@ describe("mnemoryConfigSchema", () => {
     delete process.env.MNEMORY_URL;
     delete process.env.MNEMORY_API_KEY;
     delete process.env.MNEMORY_USER_ID;
+    delete process.env.MNEMORY_TIMEOUT;
     delete process.env.TEST_MNEMORY_URL;
     delete process.env.TEST_MNEMORY_KEY;
     delete process.env.TEST_MNEMORY_USER;
@@ -39,6 +40,7 @@ describe("mnemoryConfigSchema", () => {
       scoreThreshold: 0.7,
       includeAssistant: true,
       managed: false,
+      timeout: 90_000,
     });
 
     expect(cfg.url).toBe("http://localhost:8050");
@@ -49,6 +51,7 @@ describe("mnemoryConfigSchema", () => {
     expect(cfg.scoreThreshold).toBe(0.7);
     expect(cfg.includeAssistant).toBe(true);
     expect(cfg.managed).toBe(false);
+    expect(cfg.timeout).toBe(90_000);
   });
 
   test("applies defaults for optional fields", () => {
@@ -63,6 +66,7 @@ describe("mnemoryConfigSchema", () => {
     expect(cfg.managed).toBe(true);
     expect(cfg.apiKey).toBe("");
     expect(cfg.userId).toBe("");
+    expect(cfg.timeout).toBe(60_000);
   });
 
   test("resolves ${ENV_VAR} in userId", () => {
@@ -152,6 +156,31 @@ describe("mnemoryConfigSchema", () => {
 
     const cfg1 = mnemoryConfigSchema.parse({ url: "http://localhost:8050", scoreThreshold: 1 });
     expect(cfg1.scoreThreshold).toBe(1);
+  });
+
+  test("accepts custom timeout value", () => {
+    const cfg = mnemoryConfigSchema.parse({
+      url: "http://localhost:8050",
+      timeout: 120_000,
+    });
+    expect(cfg.timeout).toBe(120_000);
+  });
+
+  test("throws when timeout is below 1000", () => {
+    expect(() =>
+      mnemoryConfigSchema.parse({
+        url: "http://localhost:8050",
+        timeout: 500,
+      }),
+    ).toThrow("timeout");
+  });
+
+  test("falls back to MNEMORY_TIMEOUT env var", () => {
+    process.env.MNEMORY_TIMEOUT = "45000";
+    const cfg = mnemoryConfigSchema.parse({
+      url: "http://localhost:8050",
+    });
+    expect(cfg.timeout).toBe(45_000);
   });
 
   test("rejects unknown config keys", () => {

@@ -41,6 +41,18 @@
       "label": "Managed Mode",
       "help": "Include mnemory behavioral instructions in the system prompt",
       "advanced": true
+    },
+    "agentPrefix": {
+      "label": "Agent ID Prefix",
+      "placeholder": "openclaw",
+      "help": "Prefix for agent IDs sent to mnemory (e.g. 'openclaw' produces 'openclaw:main'). Set to empty string to disable prefixing (or use ${MNEMORY_AGENT_PREFIX})",
+      "advanced": true
+    },
+    "timeout": {
+      "label": "Request Timeout (ms)",
+      "placeholder": "60000",
+      "help": "HTTP request timeout in milliseconds. Default: 60000 (60 seconds) (or use ${MNEMORY_TIMEOUT})",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -72,6 +84,13 @@
       },
       "managed": {
         "type": "boolean"
+      },
+      "agentPrefix": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "number",
+        "minimum": 1000
       }
     },
     "required": ["url"]

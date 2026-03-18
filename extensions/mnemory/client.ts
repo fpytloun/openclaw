@@ -263,18 +263,26 @@ type Logger = {
 // Client
 // ============================================================================
 
-const REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 export class MnemoryClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly userId: string;
   private readonly logger: Logger;
+  private readonly timeout: number;
 
-  constructor(opts: { url: string; apiKey: string; userId?: string; logger: Logger }) {
+  constructor(opts: {
+    url: string;
+    apiKey: string;
+    userId?: string;
+    timeout?: number;
+    logger: Logger;
+  }) {
     this.baseUrl = opts.url;
     this.apiKey = opts.apiKey;
     this.userId = opts.userId ?? "";
+    this.timeout = opts.timeout ?? DEFAULT_TIMEOUT_MS;
     this.logger = opts.logger;
   }
 
@@ -304,7 +312,7 @@ export class MnemoryClient {
         method: "POST",
         headers: this.headers(agentId),
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeout),
       });
       if (!res.ok) {
         this.logger.warn(`mnemory: POST ${path} returned ${res.status}: ${await res.text()}`);
@@ -322,7 +330,7 @@ export class MnemoryClient {
       const res = await fetch(`${this.baseUrl}${path}`, {
         method: "GET",
         headers: this.headers(agentId),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeout),
       });
       if (!res.ok) {
         this.logger.warn(`mnemory: GET ${path} returned ${res.status}: ${await res.text()}`);
@@ -341,7 +349,7 @@ export class MnemoryClient {
         method: "PUT",
         headers: this.headers(agentId),
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeout),
       });
       if (!res.ok) {
         this.logger.warn(`mnemory: PUT ${path} returned ${res.status}: ${await res.text()}`);
@@ -359,7 +367,7 @@ export class MnemoryClient {
       const res = await fetch(`${this.baseUrl}${path}`, {
         method: "DELETE",
         headers: this.headers(agentId),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeout),
       });
       if (!res.ok) {
         this.logger.warn(`mnemory: DELETE ${path} returned ${res.status}: ${await res.text()}`);

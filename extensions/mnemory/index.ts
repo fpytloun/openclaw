@@ -195,6 +195,7 @@ const mnemoryPlugin = {
       url: cfg.url,
       apiKey: cfg.apiKey,
       userId: cfg.userId,
+      timeout: cfg.timeout,
       logger: api.logger,
     });
     const store = createSessionStore();
@@ -1376,7 +1377,7 @@ const mnemoryPlugin = {
           .action(async (query: string, opts: { limit: string }) => {
             const result = await client.searchMemories(
               { query, limit: Number.parseInt(opts.limit, 10) },
-              "openclaw",
+              cfg.agentPrefix || undefined,
             );
             if (!result || result.results.length === 0) {
               console.log("No memories found.");
@@ -1400,7 +1401,7 @@ const mnemoryPlugin = {
                 limit: Number.parseInt(opts.limit, 10),
                 memoryType: opts.type,
               },
-              "openclaw",
+              cfg.agentPrefix || undefined,
             );
             if (!result || result.results.length === 0) {
               console.log("No memories found.");

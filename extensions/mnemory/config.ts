@@ -27,6 +27,8 @@ export type MnemoryConfig = {
   includeAssistant: boolean;
   /** Include mnemory behavioral instructions in the system prompt. Default: true. */
   managed: boolean;
+  /** Request timeout in milliseconds. Default: 60000 (60 seconds). */
+  timeout: number;
 };
 
 // ============================================================================
@@ -120,6 +122,23 @@ export const mnemoryConfigSchema = {
     // managed — default true
     const managed = typeof raw.managed === "boolean" ? raw.managed : true;
 
+    // timeout — default 60000ms (60 seconds), supports MNEMORY_TIMEOUT env var
+    let timeout = 60_000;
+    if (typeof raw.timeout === "number") {
+      if (raw.timeout < 1000) {
+        throw new Error("mnemory: 'timeout' must be at least 1000 (1 second)");
+      }
+      timeout = raw.timeout;
+    } else {
+      const envTimeout = process.env.MNEMORY_TIMEOUT;
+      if (envTimeout) {
+        const parsed = Number.parseInt(envTimeout, 10);
+        if (!Number.isNaN(parsed) && parsed >= 1000) {
+          timeout = parsed;
+        }
+      }
+    }
+
     // Reject unknown keys
     const knownKeys = new Set([
       "url",
@@ -131,6 +150,7 @@ export const mnemoryConfigSchema = {
       "scoreThreshold",
       "includeAssistant",
       "managed",
+      "timeout",
     ]);
     for (const key of Object.keys(raw)) {
       if (!knownKeys.has(key)) {
@@ -148,6 +168,7 @@ export const mnemoryConfigSchema = {
       scoreThreshold,
       includeAssistant,
       managed,
+      timeout,
     };
   },
 };
