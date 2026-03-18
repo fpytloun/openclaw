@@ -88,6 +88,12 @@ export interface McpToolDef {
 export interface McpCallResult {
   content: Array<{ type: string; text?: string; [key: string]: unknown }>;
   isError?: boolean;
+  /** Safety evaluation decision. */
+  decision?: "approve" | "deny" | "escalate";
+  /** Audit call ID (present for deny/escalate decisions). */
+  call_id?: string;
+  /** Evaluation reasoning (present for deny/escalate decisions). */
+  reasoning?: string;
   latency_ms?: number;
 }
 

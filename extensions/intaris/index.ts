@@ -447,6 +447,42 @@ const intarisPlugin = {
           }
 
           const result = data as McpCallResult;
+
+          // Handle safety evaluation decisions from Intaris.
+          // Deny and escalate are returned as structured responses so the
+          // agent sees the decision and can react appropriately.
+          if (result.decision === "deny") {
+            const reason = result.reasoning || "Tool call denied by safety evaluation";
+            log("info", `MCP ${mcpTool.server}:${mcpTool.name}: DENIED (${result.call_id})`);
+            return {
+              content: [{ type: "text", text: `[intaris] DENIED: ${reason}` }],
+              details: { decision: "deny", call_id: result.call_id, latency_ms: result.latency_ms },
+            };
+          }
+
+          if (result.decision === "escalate") {
+            const reason = result.reasoning || "Tool call requires human approval";
+            log(
+              "warn",
+              `MCP ${mcpTool.server}:${mcpTool.name}: ESCALATED (${result.call_id}): ${reason}`,
+            );
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `[intaris] ESCALATED (${result.call_id}): ${reason}\n` +
+                    `Approve or deny in the Intaris UI, then retry this tool call.`,
+                },
+              ],
+              details: {
+                decision: "escalate",
+                call_id: result.call_id,
+                latency_ms: result.latency_ms,
+              },
+            };
+          }
+
           if (result.isError) {
             const errorText =
               result.content?.map((c) => c.text || JSON.stringify(c)).join("\n") ||
@@ -632,6 +668,18 @@ const intarisPlugin = {
           sessionKey,
         },
       });
+
+      // Skip evaluation for MCP tools — evaluation happens in POST /mcp/call
+      // instead, avoiding double LLM evaluation. The MCP tool's execute()
+      // function calls POST /mcp/call which runs the full safety pipeline.
+      if (cfg.mcpTools && mcpToolCache?.tools) {
+        const isMcpTool = mcpToolCache.tools.some(
+          (t) => `${t.server}_${t.name}` === event.toolName,
+        );
+        if (isMcpTool) {
+          return {};
+        }
+      }
 
       // Evaluate the tool call
       const intentionPending = state.intentionPending;
