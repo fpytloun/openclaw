@@ -1245,10 +1245,12 @@ const mnemoryPlugin = {
         );
 
         return {
-          // Use prependSystemContext for the static instructions/core memories (cacheable),
-          // and prependContext for the dynamic recalled memories
+          // Static behavioral instructions go at the top of the system prompt (cacheable).
           prependSystemContext: state.recallResult.instructions ?? undefined,
-          prependContext: buildSystemText({
+          // Core memories + recalled search results go at the end of the system prompt.
+          // Using appendSystemContext (not prependContext) avoids polluting user messages —
+          // prependContext would prepend to the user message text and accumulate in history.
+          appendSystemContext: buildSystemText({
             ...state.recallResult,
             instructions: undefined, // Already in prependSystemContext
           }),
