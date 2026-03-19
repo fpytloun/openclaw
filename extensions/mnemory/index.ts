@@ -249,6 +249,7 @@ const mnemoryPlugin = {
             sessionId: state.mnemorySessionId ?? undefined,
             includeInstructions: cfg.managed,
             managed: cfg.managed,
+            instructionMode: "personality",
             scoreThreshold: cfg.scoreThreshold,
           },
           agentId,

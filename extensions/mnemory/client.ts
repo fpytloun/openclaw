@@ -15,6 +15,7 @@ export type RecallParams = {
   query?: string;
   includeInstructions?: boolean;
   managed?: boolean;
+  instructionMode?: string;
   scoreThreshold?: number;
   context?: string;
   labels?: Record<string, unknown>;
@@ -396,6 +397,7 @@ export class MnemoryClient {
         session_id: params.sessionId ?? undefined,
         include_instructions: params.includeInstructions ?? false,
         managed: params.managed ?? false,
+        instruction_mode: params.instructionMode ?? undefined,
         score_threshold: params.scoreThreshold ?? 0.5,
         context: params.context ?? undefined,
         labels: params.labels ?? undefined,

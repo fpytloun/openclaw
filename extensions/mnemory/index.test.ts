@@ -855,7 +855,13 @@ describe("MnemoryClient", () => {
     });
 
     await client.recall(
-      { sessionId: "s1", includeInstructions: true, managed: true, scoreThreshold: 0.6 },
+      {
+        sessionId: "s1",
+        includeInstructions: true,
+        managed: true,
+        instructionMode: "personality",
+        scoreThreshold: 0.6,
+      },
       "agent-1",
     );
 
@@ -866,6 +872,7 @@ describe("MnemoryClient", () => {
     expect(body.session_id).toBe("s1");
     expect(body.include_instructions).toBe(true);
     expect(body.managed).toBe(true);
+    expect(body.instruction_mode).toBe("personality");
     expect(body.score_threshold).toBe(0.6);
 
     fetchSpy.mockRestore();
