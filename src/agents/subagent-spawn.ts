@@ -507,6 +507,37 @@ export async function spawnSubagentDirect(
     }
     threadBindingReady = true;
   }
+
+  // Fire subagent_spawning for all spawns (not just thread-bound).
+  // This allows plugins (e.g., Intaris) to set up parent-child session
+  // relationships before the child's session_start fires.
+  // Non-thread spawning hooks are best-effort — errors don't block spawn.
+  if (!requestThreadBinding && hookRunner?.hasHooks("subagent_spawning")) {
+    try {
+      await hookRunner.runSubagentSpawning(
+        {
+          childSessionKey,
+          agentId: targetAgentId,
+          label: label || undefined,
+          mode: spawnMode,
+          requester: {
+            channel: requesterOrigin?.channel,
+            accountId: requesterOrigin?.accountId,
+            to: requesterOrigin?.to,
+            threadId: requesterOrigin?.threadId,
+          },
+          threadRequested: false,
+        },
+        {
+          childSessionKey,
+          requesterSessionKey: requesterInternalKey,
+        },
+      );
+    } catch {
+      // Best-effort for non-thread spawns — don't block the spawn.
+    }
+  }
+
   const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 
   let childSystemPrompt = buildSubagentSystemPrompt({
