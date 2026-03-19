@@ -129,6 +129,14 @@ export interface SessionState {
   lastAssistantText: string;
   /** In-flight session creation promise (prevents duplicate creation). */
   creating?: Promise<string | null>;
+  /** Dedup: last reasoning prompt submitted (prevents double submission from dual plugin instances). */
+  lastReasoningPrompt?: string;
+  /** Dedup: tool call IDs already evaluated (prevents double evaluation from dual plugin instances). */
+  evaluatedToolCalls?: Set<string>;
+  /** Dedup: tool call IDs already recorded (prevents double recording from dual plugin instances). */
+  recordedToolResults?: Set<string>;
+  /** Dedup: last assistant text recorded (prevents double recording from dual plugin instances). */
+  lastRecordedAssistantText?: string;
   /** Parent Intaris session ID for sub-agent sessions. */
   parentIntarisSessionId?: string;
   /** Sub-agent label (e.g. "research", "code-review"). */

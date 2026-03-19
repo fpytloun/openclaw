@@ -182,11 +182,6 @@ function buildPolicy(allowPaths: string): Record<string, unknown> {
 
 const sessions = new Map<string, SessionState>();
 
-// Prevent duplicate hook registration. Tool registration (api.registerTool)
-// must still run on every register() call since each PluginRegistry resolves
-// tools independently. Only event hooks (api.on) are guarded.
-let hooksRegistered = false;
-
 // MCP tool cache — shared across instances so the tool factory (which may
 // be registered by either instance) always reads the same cache.
 let mcpToolCache: McpToolCache | null = null;
@@ -677,527 +672,548 @@ const intarisPlugin = {
       mcpTools: cfg.mcpTools,
     });
 
-    // -- Hook registration (guarded) ------------------------------------------
-    // Only the first register() call registers hooks. The second call (from
-    // resolvePluginTools with a different workspaceDir) skips hooks to prevent
-    // duplicate side effects (double reasoning, double evaluation, etc.).
-    // Tool registration (api.registerTool) runs on every call since each
-    // PluginRegistry resolves tools independently.
-    if (!hooksRegistered) {
-      hooksRegistered = true;
+    // -- Hooks ---------------------------------------------------------------
+    // Hooks are registered on every register() call because each call creates
+    // a new PluginRegistry and the global hook runner is replaced. Side effects
+    // are deduplicated at execution time via the shared module-level sessions
+    // Map (e.g., ensureSession dedup promise, per-turn reasoning dedup).
 
-      // -- session_start: Create Intaris session --------------------------------
-      api.on("session_start", async (_event, ctx) => {
-        const sessionKey = ctx.sessionKey;
-        if (!sessionKey) return;
+    // -- session_start: Create Intaris session --------------------------------
+    api.on("session_start", async (_event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
 
-        const state = getOrCreateState(sessionKey);
-        // Pre-create the Intaris session (best-effort, non-blocking)
-        ensureSession(sessionKey, state, ctx).catch(() => {});
+      const state = getOrCreateState(sessionKey);
+      // Pre-create the Intaris session (best-effort, non-blocking)
+      ensureSession(sessionKey, state, ctx).catch(() => {});
 
-        // Refresh MCP tool cache on session start (best-effort, non-blocking)
-        if (cfg.mcpTools && isMcpCacheStale()) {
-          refreshMcpToolCache(ctx.agentId).catch(() => {});
-        }
-      });
+      // Refresh MCP tool cache on session start (best-effort, non-blocking)
+      if (cfg.mcpTools && isMcpCacheStale()) {
+        refreshMcpToolCache(ctx.agentId).catch(() => {});
+      }
+    });
 
-      // -- subagent_spawning: Link child Intaris session to parent ----------------
-      // Fires BEFORE the child session starts, so we can pre-populate the
-      // child's state with the parent Intaris session ID. When session_start
-      // fires for the child and calls ensureSession, it will pass the
-      // parent_session_id to the Intaris backend.
-      api.on("subagent_spawning", async (event, ctx) => {
-        const childKey = event.childSessionKey;
-        if (!childKey) return { status: "ok" as const };
+    // -- subagent_spawning: Link child Intaris session to parent ----------------
+    // Fires BEFORE the child session starts, so we can pre-populate the
+    // child's state with the parent Intaris session ID. When session_start
+    // fires for the child and calls ensureSession, it will pass the
+    // parent_session_id to the Intaris backend.
+    api.on("subagent_spawning", async (event, ctx) => {
+      const childKey = event.childSessionKey;
+      if (!childKey) return { status: "ok" as const };
 
-        const requesterKey = ctx.requesterSessionKey;
-        const parentState = requesterKey ? sessions.get(requesterKey) : undefined;
+      const requesterKey = ctx.requesterSessionKey;
+      const parentState = requesterKey ? sessions.get(requesterKey) : undefined;
 
-        const childState = getOrCreateState(childKey);
-        if (parentState?.intarisSessionId) {
-          childState.parentIntarisSessionId = parentState.intarisSessionId;
-          log("info", `Sub-agent ${childKey}: linked to parent ${parentState.intarisSessionId}`);
-        }
-        // Store sub-agent metadata for session details enrichment.
-        if (event.label) childState.subagentLabel = event.label;
-        if (event.mode) childState.subagentMode = event.mode;
+      const childState = getOrCreateState(childKey);
+      if (parentState?.intarisSessionId) {
+        childState.parentIntarisSessionId = parentState.intarisSessionId;
+        log("info", `Sub-agent ${childKey}: linked to parent ${parentState.intarisSessionId}`);
+      }
+      // Store sub-agent metadata for session details enrichment.
+      if (event.label) childState.subagentLabel = event.label;
+      if (event.mode) childState.subagentMode = event.mode;
 
-        return { status: "ok" as const };
-      });
+      return { status: "ok" as const };
+    });
 
-      // -- subagent_ended: Complete child Intaris session -------------------------
-      api.on("subagent_ended", async (event) => {
-        const sessionKey = event.targetSessionKey;
-        if (!sessionKey) return;
+    // -- subagent_ended: Complete child Intaris session -------------------------
+    api.on("subagent_ended", async (event) => {
+      const sessionKey = event.targetSessionKey;
+      if (!sessionKey) return;
 
-        const state = sessions.get(sessionKey);
-        if (!state?.intarisSessionId) return;
+      const state = sessions.get(sessionKey);
+      if (!state?.intarisSessionId) return;
 
-        log("info", `Sub-agent ${sessionKey}: ended (${event.outcome || event.reason})`);
-        signalCompletion(state, sessionKey, {});
-        sessions.delete(sessionKey);
-      });
+      log("info", `Sub-agent ${sessionKey}: ended (${event.outcome || event.reason})`);
+      signalCompletion(state, sessionKey, {});
+      sessions.delete(sessionKey);
+    });
 
-      // -- before_reset: User sent /new or /reset — close current Intaris session
-      api.on("before_reset", async (_event, ctx) => {
-        const sessionKey = ctx.sessionKey;
-        if (!sessionKey) return;
+    // -- before_reset: User sent /new or /reset — close current Intaris session
+    api.on("before_reset", async (_event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
 
-        const state = sessions.get(sessionKey);
-        if (!state) return;
+      const state = sessions.get(sessionKey);
+      if (!state) return;
 
-        // Signal completion to Intaris and wipe local state so the
-        // subsequent session_start creates a fresh Intaris session.
-        signalCompletion(state, sessionKey, ctx);
-        sessions.delete(sessionKey);
-      });
+      // Signal completion to Intaris and wipe local state so the
+      // subsequent session_start creates a fresh Intaris session.
+      signalCompletion(state, sessionKey, ctx);
+      sessions.delete(sessionKey);
+    });
 
-      // -- before_agent_start: Forward user prompt as reasoning context ----------
-      // Uses before_agent_start instead of message_received because the latter
-      // does not expose sessionKey in its context (PluginHookMessageContext only
-      // has channelId/accountId/conversationId).
-      api.on("before_agent_start", async (event, ctx) => {
-        const sessionKey = ctx.sessionKey;
-        if (!sessionKey) return;
+    // -- before_agent_start: Forward user prompt as reasoning context ----------
+    // Uses before_agent_start instead of message_received because the latter
+    // does not expose sessionKey in its context (PluginHookMessageContext only
+    // has channelId/accountId/conversationId).
+    api.on("before_agent_start", async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
 
-        const state = sessions.get(sessionKey);
-        if (!state?.intarisSessionId) {
-          // Ensure session exists (may not have been created yet if session_start
-          // fired before config was ready)
-          const s = getOrCreateState(sessionKey);
-          await ensureSession(sessionKey, s, ctx).catch(() => {});
-          if (!s.intarisSessionId) return;
-        }
+      const state = sessions.get(sessionKey);
+      if (!state?.intarisSessionId) {
+        // Ensure session exists (may not have been created yet if session_start
+        // fired before config was ready)
+        const s = getOrCreateState(sessionKey);
+        await ensureSession(sessionKey, s, ctx).catch(() => {});
+        if (!s.intarisSessionId) return;
+      }
 
-        const stateRef = sessions.get(sessionKey);
-        if (!stateRef) return;
+      const stateRef = sessions.get(sessionKey);
+      if (!stateRef) return;
 
-        const content = typeof event.prompt === "string" ? event.prompt.trim() : "";
-        if (!content) return;
+      const content = typeof event.prompt === "string" ? event.prompt.trim() : "";
+      if (!content) return;
 
-        // Resume session from idle when user provides new input
-        if (stateRef.isIdle) {
-          stateRef.isIdle = false;
-          client.updateStatus(stateRef.intarisSessionId!, "active", ctx.agentId).catch(() => {});
-        }
+      // Resume session from idle when user provides new input
+      if (stateRef.isIdle) {
+        stateRef.isIdle = false;
+        client.updateStatus(stateRef.intarisSessionId!, "active", ctx.agentId).catch(() => {});
+      }
 
-        // Consume last assistant text as context for intention generation.
-        // This helps the intention generator interpret short user replies like
-        // "ok, do it" by providing the assistant's last response as context.
-        const assistantContext = stateRef.lastAssistantText || undefined;
-        stateRef.lastAssistantText = "";
+      // Consume last assistant text as context for intention generation.
+      // This helps the intention generator interpret short user replies like
+      // "ok, do it" by providing the assistant's last response as context.
+      const assistantContext = stateRef.lastAssistantText || undefined;
+      stateRef.lastAssistantText = "";
 
-        // Strip inbound metadata (sender/conversation info) from the user
-        // message so it doesn't pollute reasoning context or session recording.
-        const { clean: cleanUserText, sender: userSender } = stripRecordingMetadata(content);
+      // Strip inbound metadata (sender/conversation info) from the user
+      // message so it doesn't pollute reasoning context or session recording.
+      const { clean: cleanUserText, sender: userSender } = stripRecordingMetadata(content);
 
-        // Forward clean user message as reasoning context
-        client
-          .submitReasoning(
-            stateRef.intarisSessionId!,
-            `User message: ${cleanUserText}`,
-            ctx.agentId,
-            assistantContext,
-          )
-          .catch(() => {});
+      // Dedup: the plugin may be registered on multiple PluginRegistry instances
+      // (gateway startup + agent run). Both fire before_agent_start for the same
+      // prompt. Skip if this exact prompt was already submitted this turn.
+      if (stateRef.lastReasoningPrompt === cleanUserText) return;
+      stateRef.lastReasoningPrompt = cleanUserText;
 
-        // Signal that an intention update is in flight. The next
-        // before_tool_call will include intention_pending=true so the
-        // server waits for the /reasoning call to arrive before evaluating.
-        stateRef.intentionPending = true;
-
-        // Record clean user message for session recording.
-        recordEvent(sessionKey, {
-          type: "message",
-          data: {
-            role: "user",
-            text: cleanUserText,
-            sender: userSender,
-            sessionKey,
-          },
-        });
-      });
-
-      // -- before_tool_call: Core guardrail ------------------------------------
-      api.on("before_tool_call", async (event, ctx) => {
-        const sessionKey = ctx.sessionKey;
-        if (!sessionKey) return {};
-
-        const state = getOrCreateState(sessionKey);
-
-        // Ensure session exists (lazy creation for resumed sessions)
-        const intarisSessionId = await ensureSession(sessionKey, state, ctx);
-        if (!intarisSessionId) {
-          if (cfg.failOpen) return {};
-          const detail = state.lastError || "unknown error";
-          return { block: true, blockReason: `[intaris] Cannot create session: ${detail}` };
-        }
-
-        // Record tool call event (fire-and-forget)
-        recordEvent(sessionKey, {
-          type: "tool_call",
-          data: {
-            tool: event.toolName,
-            args: event.params,
-            toolCallId: event.toolCallId,
-            sessionKey,
-          },
-        });
-
-        // Skip evaluation for MCP tools — evaluation happens in POST /mcp/call
-        // instead, avoiding double LLM evaluation. The MCP tool's execute()
-        // function calls POST /mcp/call which runs the full safety pipeline.
-        if (cfg.mcpTools && mcpToolCache?.tools) {
-          const isMcpTool = mcpToolCache.tools.some(
-            (t) => `${t.server}_${t.name}` === event.toolName,
-          );
-          if (isMcpTool) {
-            return {};
-          }
-        }
-
-        // Evaluate the tool call
-        const intentionPending = state.intentionPending;
-        const {
-          data,
-          error: evalError,
-          status: evalStatus,
-        } = await client.evaluate(
-          intarisSessionId,
-          event.toolName,
-          event.params,
-          intentionPending,
+      // Forward clean user message as reasoning context
+      client
+        .submitReasoning(
+          stateRef.intarisSessionId!,
+          `User message: ${cleanUserText}`,
           ctx.agentId,
+          assistantContext,
+        )
+        .catch(() => {});
+
+      // Signal that an intention update is in flight. The next
+      // before_tool_call will include intention_pending=true so the
+      // server waits for the /reasoning call to arrive before evaluating.
+      stateRef.intentionPending = true;
+
+      // Record clean user message for session recording.
+      recordEvent(sessionKey, {
+        type: "message",
+        data: {
+          role: "user",
+          text: cleanUserText,
+          sender: userSender,
+          sessionKey,
+        },
+      });
+    });
+
+    // -- before_tool_call: Core guardrail ------------------------------------
+    api.on("before_tool_call", async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return {};
+
+      const state = getOrCreateState(sessionKey);
+
+      // Ensure session exists (lazy creation for resumed sessions)
+      const intarisSessionId = await ensureSession(sessionKey, state, ctx);
+      if (!intarisSessionId) {
+        if (cfg.failOpen) return {};
+        const detail = state.lastError || "unknown error";
+        return { block: true, blockReason: `[intaris] Cannot create session: ${detail}` };
+      }
+
+      // Dedup: skip if this tool call was already evaluated by another plugin instance.
+      if (event.toolCallId) {
+        if (!state.evaluatedToolCalls) state.evaluatedToolCalls = new Set();
+        if (state.evaluatedToolCalls.has(event.toolCallId)) return {};
+        state.evaluatedToolCalls.add(event.toolCallId);
+      }
+
+      // Record tool call event (fire-and-forget)
+      recordEvent(sessionKey, {
+        type: "tool_call",
+        data: {
+          tool: event.toolName,
+          args: event.params,
+          toolCallId: event.toolCallId,
+          sessionKey,
+        },
+      });
+
+      // Skip evaluation for MCP tools — evaluation happens in POST /mcp/call
+      // instead, avoiding double LLM evaluation. The MCP tool's execute()
+      // function calls POST /mcp/call which runs the full safety pipeline.
+      if (cfg.mcpTools && mcpToolCache?.tools) {
+        const isMcpTool = mcpToolCache.tools.some(
+          (t) => `${t.server}_${t.name}` === event.toolName,
         );
-
-        // Clear the flag after the first evaluate call
-        if (intentionPending) {
-          state.intentionPending = false;
+        if (isMcpTool) {
+          return {};
         }
+      }
 
-        if (!data) {
-          // Distinguish config errors (4xx) from transient failures (5xx/network)
-          if (evalStatus !== null && evalStatus >= 400 && evalStatus < 500) {
-            return {
-              block: true,
-              blockReason: `[intaris] Evaluation rejected for ${event.toolName}: ${evalError}`,
-            };
-          }
-          // Intaris unreachable or server error
-          if (cfg.failOpen) {
-            log("warn", `Evaluate failed for ${event.toolName} -- allowing (fail-open)`);
-            return {};
-          }
+      // Evaluate the tool call
+      const intentionPending = state.intentionPending;
+      const {
+        data,
+        error: evalError,
+        status: evalStatus,
+      } = await client.evaluate(
+        intarisSessionId,
+        event.toolName,
+        event.params,
+        intentionPending,
+        ctx.agentId,
+      );
+
+      // Clear the flag after the first evaluate call
+      if (intentionPending) {
+        state.intentionPending = false;
+      }
+
+      if (!data) {
+        // Distinguish config errors (4xx) from transient failures (5xx/network)
+        if (evalStatus !== null && evalStatus >= 400 && evalStatus < 500) {
           return {
             block: true,
-            blockReason: `[intaris] Evaluation failed for ${event.toolName}: ${evalError || "server unreachable"} (INTARIS_FAIL_OPEN=false)`,
+            blockReason: `[intaris] Evaluation rejected for ${event.toolName}: ${evalError}`,
           };
         }
-
-        const result = data as unknown as EvaluateResponse;
-
-        // Track decision statistics
-        state.callCount++;
-        if (result.decision === "approve") state.approvedCount++;
-        else if (result.decision === "deny") state.deniedCount++;
-        else if (result.decision === "escalate") state.escalatedCount++;
-
-        // Track recent tool names (bounded)
-        state.recentTools = [...state.recentTools, event.toolName].slice(-MAX_RECENT_TOOLS);
-
-        log(
-          "info",
-          `${event.toolName}: ${result.decision} (${result.path}, ${result.latency_ms}ms)`,
-          {
-            call_id: result.call_id,
-            risk: result.risk,
-          },
-        );
-
-        // Send periodic checkpoint (fire-and-forget)
-        sendCheckpoint(state, ctx.agentId);
-
-        // Try to update intention after gathering enough context
-        if (!state.intentionUpdated && state.callCount >= 3) {
-          state.intentionUpdated = true;
-          client
-            .updateSession(intarisSessionId, buildIntention(ctx), buildDetails(ctx), ctx.agentId)
-            .catch(() => {});
+        // Intaris unreachable or server error
+        if (cfg.failOpen) {
+          log("warn", `Evaluate failed for ${event.toolName} -- allowing (fail-open)`);
+          return {};
         }
+        return {
+          block: true,
+          blockReason: `[intaris] Evaluation failed for ${event.toolName}: ${evalError || "server unreachable"} (INTARIS_FAIL_OPEN=false)`,
+        };
+      }
 
-        // -- Handle DENY -------------------------------------------------------
-        if (result.decision === "deny") {
-          // Session-level suspension: wait for user action
-          if (result.session_status === "suspended") {
-            const statusReason = result.status_reason || "Session suspended";
-            log(
-              "warn",
-              `Session suspended: ${statusReason}. Waiting for approval in Intaris UI...`,
-            );
+      const result = data as unknown as EvaluateResponse;
 
-            // Poll GET /session/{id} with exponential backoff
-            const suspendBackoffMs = [2000, 4000, 8000, 16000, 30000];
-            const suspendStart = Date.now();
-            let suspendAttempt = 0;
-            let suspendLastReminder = suspendStart;
+      // Track decision statistics
+      state.callCount++;
+      if (result.decision === "approve") state.approvedCount++;
+      else if (result.decision === "deny") state.deniedCount++;
+      else if (result.decision === "escalate") state.escalatedCount++;
 
-            while (true) {
-              // Check timeout
-              if (
-                cfg.escalationTimeoutMs > 0 &&
-                Date.now() - suspendStart > cfg.escalationTimeoutMs
-              ) {
-                return {
-                  block: true,
-                  blockReason:
-                    `[intaris] SESSION SUSPENSION TIMEOUT: ${statusReason}\n` +
-                    `No response within ${cfg.escalationTimeoutMs / 1000}s. Reactivate or terminate in the Intaris UI.`,
-                };
-              }
+      // Track recent tool names (bounded)
+      state.recentTools = [...state.recentTools, event.toolName].slice(-MAX_RECENT_TOOLS);
 
-              // Periodic reminder every 60s
-              const suspendNow = Date.now();
-              if (suspendNow - suspendLastReminder >= 60000) {
-                const waitSec = Math.round((suspendNow - suspendStart) / 1000);
-                log(
-                  "warn",
-                  `Still waiting for session approval... ${waitSec}s elapsed. Reason: ${statusReason}`,
-                );
-                suspendLastReminder = suspendNow;
-              }
+      log(
+        "info",
+        `${event.toolName}: ${result.decision} (${result.path}, ${result.latency_ms}ms)`,
+        {
+          call_id: result.call_id,
+          risk: result.risk,
+        },
+      );
 
-              // Wait with exponential backoff
-              const suspendDelay =
-                suspendBackoffMs[Math.min(suspendAttempt, suspendBackoffMs.length - 1)];
-              await new Promise((resolve) => setTimeout(resolve, suspendDelay));
-              suspendAttempt++;
+      // Send periodic checkpoint (fire-and-forget)
+      sendCheckpoint(state, ctx.agentId);
 
-              // Poll session status
-              const { data: sessionData } = await client.getSession(intarisSessionId, ctx.agentId);
-              if (!sessionData) continue; // Server unreachable -- keep polling
+      // Try to update intention after gathering enough context
+      if (!state.intentionUpdated && state.callCount >= 3) {
+        state.intentionUpdated = true;
+        client
+          .updateSession(intarisSessionId, buildIntention(ctx), buildDetails(ctx), ctx.agentId)
+          .catch(() => {});
+      }
 
-              const sessionResponse = sessionData as unknown as {
-                status: string;
-                status_reason?: string;
-              };
+      // -- Handle DENY -------------------------------------------------------
+      if (result.decision === "deny") {
+        // Session-level suspension: wait for user action
+        if (result.session_status === "suspended") {
+          const statusReason = result.status_reason || "Session suspended";
+          log("warn", `Session suspended: ${statusReason}. Waiting for approval in Intaris UI...`);
 
-              if (sessionResponse.status === "active") {
-                // Session reactivated -- re-evaluate this tool call
-                log("info", `Session reactivated -- re-evaluating ${event.toolName}`);
-
-                const { data: reData } = await client.evaluate(
-                  intarisSessionId,
-                  event.toolName,
-                  event.params,
-                  false,
-                  ctx.agentId,
-                );
-
-                if (!reData) {
-                  if (cfg.failOpen) return {};
-                  return {
-                    block: true,
-                    blockReason: `[intaris] Re-evaluation failed for ${event.toolName} after session reactivation`,
-                  };
-                }
-
-                const reResult = reData as unknown as EvaluateResponse;
-                if (reResult.decision === "deny") {
-                  return {
-                    block: true,
-                    blockReason: `[intaris] DENIED: ${reResult.reasoning || "Tool call denied after session reactivation"}`,
-                  };
-                }
-                if (reResult.decision === "escalate") {
-                  return {
-                    block: true,
-                    blockReason: `[intaris] ESCALATED after reactivation: ${reResult.reasoning || "Requires human approval"}`,
-                  };
-                }
-                // Approved -- let tool proceed
-                return {};
-              }
-
-              if (sessionResponse.status === "terminated") {
-                return {
-                  block: true,
-                  blockReason: `[intaris] Session terminated: ${sessionResponse.status_reason || "terminated by user"}`,
-                };
-              }
-              // Still suspended -- continue polling
-            }
-          }
-
-          // Session termination: hard kill
-          if (result.session_status === "terminated") {
-            return {
-              block: true,
-              blockReason: `[intaris] Session terminated: ${result.status_reason || "terminated by user"}`,
-            };
-          }
-
-          // Regular deny
-          const reason = result.reasoning || "Tool call denied by safety evaluation";
-          return { block: true, blockReason: `[intaris] DENIED: ${reason}` };
-        }
-
-        // -- Handle ESCALATE ---------------------------------------------------
-        if (result.decision === "escalate") {
-          const reason = result.reasoning || "Tool call requires human approval";
-          log(
-            "warn",
-            `ESCALATED ${event.toolName} (${result.call_id}): ${reason}. Waiting for approval in Intaris UI...`,
-          );
-
-          // Poll for user decision with exponential backoff
-          const pollBackoffMs = [2000, 4000, 8000, 16000, 30000];
-          const startTime = Date.now();
-          let pollAttempt = 0;
-          let lastReminderAt = startTime;
+          // Poll GET /session/{id} with exponential backoff
+          const suspendBackoffMs = [2000, 4000, 8000, 16000, 30000];
+          const suspendStart = Date.now();
+          let suspendAttempt = 0;
+          let suspendLastReminder = suspendStart;
 
           while (true) {
-            // Check timeout (0 = no timeout)
-            if (cfg.escalationTimeoutMs > 0 && Date.now() - startTime > cfg.escalationTimeoutMs) {
+            // Check timeout
+            if (
+              cfg.escalationTimeoutMs > 0 &&
+              Date.now() - suspendStart > cfg.escalationTimeoutMs
+            ) {
               return {
                 block: true,
                 blockReason:
-                  `[intaris] ESCALATION TIMEOUT (${result.call_id}): ${reason}\n` +
-                  `No response within ${cfg.escalationTimeoutMs / 1000}s. Approve or deny in the Intaris UI.`,
+                  `[intaris] SESSION SUSPENSION TIMEOUT: ${statusReason}\n` +
+                  `No response within ${cfg.escalationTimeoutMs / 1000}s. Reactivate or terminate in the Intaris UI.`,
               };
             }
 
             // Periodic reminder every 60s
-            const now = Date.now();
-            if (now - lastReminderAt >= 60000) {
-              const waitSec = Math.round((now - startTime) / 1000);
+            const suspendNow = Date.now();
+            if (suspendNow - suspendLastReminder >= 60000) {
+              const waitSec = Math.round((suspendNow - suspendStart) / 1000);
               log(
                 "warn",
-                `Still waiting for escalation approval for ${event.toolName} (${result.call_id})... ${waitSec}s elapsed`,
+                `Still waiting for session approval... ${waitSec}s elapsed. Reason: ${statusReason}`,
               );
-              lastReminderAt = now;
+              suspendLastReminder = suspendNow;
             }
 
-            // Wait with exponential backoff (capped at 30s)
-            const delay = pollBackoffMs[Math.min(pollAttempt, pollBackoffMs.length - 1)];
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            pollAttempt++;
+            // Wait with exponential backoff
+            const suspendDelay =
+              suspendBackoffMs[Math.min(suspendAttempt, suspendBackoffMs.length - 1)];
+            await new Promise((resolve) => setTimeout(resolve, suspendDelay));
+            suspendAttempt++;
 
-            // Check if the escalation has been resolved
-            const { data: auditData } = await client.getAudit(result.call_id, ctx.agentId);
-            if (!auditData) continue; // Server unreachable -- keep polling
+            // Poll session status
+            const { data: sessionData } = await client.getSession(intarisSessionId, ctx.agentId);
+            if (!sessionData) continue; // Server unreachable -- keep polling
 
-            const auditRecord = auditData as unknown as {
-              user_decision?: string;
-              user_note?: string;
+            const sessionResponse = sessionData as unknown as {
+              status: string;
+              status_reason?: string;
             };
 
-            if (auditRecord.user_decision === "approve") {
-              log("info", `Escalation approved: ${event.toolName} (${result.call_id})`);
-              break; // Approved -- let the tool call proceed
+            if (sessionResponse.status === "active") {
+              // Session reactivated -- re-evaluate this tool call
+              log("info", `Session reactivated -- re-evaluating ${event.toolName}`);
+
+              const { data: reData } = await client.evaluate(
+                intarisSessionId,
+                event.toolName,
+                event.params,
+                false,
+                ctx.agentId,
+              );
+
+              if (!reData) {
+                if (cfg.failOpen) return {};
+                return {
+                  block: true,
+                  blockReason: `[intaris] Re-evaluation failed for ${event.toolName} after session reactivation`,
+                };
+              }
+
+              const reResult = reData as unknown as EvaluateResponse;
+              if (reResult.decision === "deny") {
+                return {
+                  block: true,
+                  blockReason: `[intaris] DENIED: ${reResult.reasoning || "Tool call denied after session reactivation"}`,
+                };
+              }
+              if (reResult.decision === "escalate") {
+                return {
+                  block: true,
+                  blockReason: `[intaris] ESCALATED after reactivation: ${reResult.reasoning || "Requires human approval"}`,
+                };
+              }
+              // Approved -- let tool proceed
+              return {};
             }
 
-            if (auditRecord.user_decision === "deny") {
-              const denyNote = auditRecord.user_note ? ` -- ${auditRecord.user_note}` : "";
+            if (sessionResponse.status === "terminated") {
               return {
                 block: true,
-                blockReason: `[intaris] DENIED by user (${result.call_id}): ${reason}${denyNote}`,
+                blockReason: `[intaris] Session terminated: ${sessionResponse.status_reason || "terminated by user"}`,
               };
             }
-
-            // No decision yet -- continue polling
+            // Still suspended -- continue polling
           }
         }
 
-        // decision === "approve" (or escalation approved) -- tool call proceeds
-        return {};
+        // Session termination: hard kill
+        if (result.session_status === "terminated") {
+          return {
+            block: true,
+            blockReason: `[intaris] Session terminated: ${result.status_reason || "terminated by user"}`,
+          };
+        }
+
+        // Regular deny
+        const reason = result.reasoning || "Tool call denied by safety evaluation";
+        return { block: true, blockReason: `[intaris] DENIED: ${reason}` };
+      }
+
+      // -- Handle ESCALATE ---------------------------------------------------
+      if (result.decision === "escalate") {
+        const reason = result.reasoning || "Tool call requires human approval";
+        log(
+          "warn",
+          `ESCALATED ${event.toolName} (${result.call_id}): ${reason}. Waiting for approval in Intaris UI...`,
+        );
+
+        // Poll for user decision with exponential backoff
+        const pollBackoffMs = [2000, 4000, 8000, 16000, 30000];
+        const startTime = Date.now();
+        let pollAttempt = 0;
+        let lastReminderAt = startTime;
+
+        while (true) {
+          // Check timeout (0 = no timeout)
+          if (cfg.escalationTimeoutMs > 0 && Date.now() - startTime > cfg.escalationTimeoutMs) {
+            return {
+              block: true,
+              blockReason:
+                `[intaris] ESCALATION TIMEOUT (${result.call_id}): ${reason}\n` +
+                `No response within ${cfg.escalationTimeoutMs / 1000}s. Approve or deny in the Intaris UI.`,
+            };
+          }
+
+          // Periodic reminder every 60s
+          const now = Date.now();
+          if (now - lastReminderAt >= 60000) {
+            const waitSec = Math.round((now - startTime) / 1000);
+            log(
+              "warn",
+              `Still waiting for escalation approval for ${event.toolName} (${result.call_id})... ${waitSec}s elapsed`,
+            );
+            lastReminderAt = now;
+          }
+
+          // Wait with exponential backoff (capped at 30s)
+          const delay = pollBackoffMs[Math.min(pollAttempt, pollBackoffMs.length - 1)];
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          pollAttempt++;
+
+          // Check if the escalation has been resolved
+          const { data: auditData } = await client.getAudit(result.call_id, ctx.agentId);
+          if (!auditData) continue; // Server unreachable -- keep polling
+
+          const auditRecord = auditData as unknown as {
+            user_decision?: string;
+            user_note?: string;
+          };
+
+          if (auditRecord.user_decision === "approve") {
+            log("info", `Escalation approved: ${event.toolName} (${result.call_id})`);
+            break; // Approved -- let the tool call proceed
+          }
+
+          if (auditRecord.user_decision === "deny") {
+            const denyNote = auditRecord.user_note ? ` -- ${auditRecord.user_note}` : "";
+            return {
+              block: true,
+              blockReason: `[intaris] DENIED by user (${result.call_id}): ${reason}${denyNote}`,
+            };
+          }
+
+          // No decision yet -- continue polling
+        }
+      }
+
+      // decision === "approve" (or escalation approved) -- tool call proceeds
+      return {};
+    });
+
+    // -- after_tool_call: Record tool results ---------------------------------
+    api.on("after_tool_call", async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      // Dedup: skip if this tool result was already recorded by another plugin instance.
+      if (event.toolCallId) {
+        const state = sessions.get(sessionKey);
+        if (state) {
+          if (!state.recordedToolResults) state.recordedToolResults = new Set();
+          if (state.recordedToolResults.has(event.toolCallId)) return;
+          state.recordedToolResults.add(event.toolCallId);
+        }
+      }
+
+      recordEvent(sessionKey, {
+        type: "tool_result",
+        data: {
+          tool: event.toolName,
+          toolCallId: event.toolCallId,
+          sessionKey,
+          error: event.error,
+          durationMs: event.durationMs,
+          ...(cfg.recordToolOutput && event.result
+            ? { output: extractToolOutput(event.result) }
+            : {}),
+        },
       });
+    });
 
-      // -- after_tool_call: Record tool results ---------------------------------
-      api.on("after_tool_call", async (event, ctx) => {
-        const sessionKey = ctx.sessionKey;
-        if (!sessionKey) return;
+    // -- llm_output: Capture last assistant text for intention context ---------
+    api.on("llm_output", async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
 
+      const state = sessions.get(sessionKey);
+      if (!state) return;
+
+      // Store the last assistant text so it can be sent as context with the
+      // next reasoning call, helping the intention generator interpret short
+      // user replies like "ok, do it".
+      const texts = event.assistantTexts;
+      if (texts && texts.length > 0) {
+        const assistantText = texts[texts.length - 1];
+        state.lastAssistantText = assistantText;
+
+        // Dedup: skip if this exact assistant text was already recorded.
+        if (state.lastRecordedAssistantText === assistantText) return;
+        state.lastRecordedAssistantText = assistantText;
+
+        // Record assistant message for session recording
         recordEvent(sessionKey, {
-          type: "tool_result",
+          type: "message",
           data: {
-            tool: event.toolName,
-            toolCallId: event.toolCallId,
+            role: "assistant",
+            text: assistantText,
             sessionKey,
-            error: event.error,
-            durationMs: event.durationMs,
-            ...(cfg.recordToolOutput && event.result
-              ? { output: extractToolOutput(event.result) }
-              : {}),
           },
         });
-      });
+      }
+    });
 
-      // -- llm_output: Capture last assistant text for intention context ---------
-      api.on("llm_output", async (event, ctx) => {
-        const sessionKey = ctx.sessionKey;
-        if (!sessionKey) return;
+    // -- agent_end: Send checkpoint if interval reached -----------------------
+    api.on("agent_end", async (_event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
 
-        const state = sessions.get(sessionKey);
-        if (!state) return;
+      const state = sessions.get(sessionKey);
+      if (!state?.intarisSessionId) return;
 
-        // Store the last assistant text so it can be sent as context with the
-        // next reasoning call, helping the intention generator interpret short
-        // user replies like "ok, do it".
-        const texts = event.assistantTexts;
-        if (texts && texts.length > 0) {
-          state.lastAssistantText = texts[texts.length - 1];
+      // Transition to idle -- the agent run is done, waiting for next input
+      if (!state.isIdle) {
+        state.isIdle = true;
+        client.updateStatus(state.intarisSessionId, "idle", ctx.agentId).catch(() => {});
+      }
+    });
 
-          // Record assistant message for session recording
-          recordEvent(sessionKey, {
-            type: "message",
-            data: {
-              role: "assistant",
-              text: state.lastAssistantText,
-              sessionKey,
-            },
-          });
-        }
-      });
+    // -- session_end: Signal completion to Intaris ----------------------------
+    api.on("session_end", async (_event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
 
-      // -- agent_end: Send checkpoint if interval reached -----------------------
-      api.on("agent_end", async (_event, ctx) => {
-        const sessionKey = ctx.sessionKey;
-        if (!sessionKey) return;
+      const state = sessions.get(sessionKey);
+      if (!state) return;
 
-        const state = sessions.get(sessionKey);
-        if (!state?.intarisSessionId) return;
+      signalCompletion(state, sessionKey, ctx);
+      sessions.delete(sessionKey);
+    });
 
-        // Transition to idle -- the agent run is done, waiting for next input
-        if (!state.isIdle) {
-          state.isIdle = true;
-          client.updateStatus(state.intarisSessionId, "idle", ctx.agentId).catch(() => {});
-        }
-      });
-
-      // -- session_end: Signal completion to Intaris ----------------------------
-      api.on("session_end", async (_event, ctx) => {
-        const sessionKey = ctx.sessionKey;
-        if (!sessionKey) return;
-
-        const state = sessions.get(sessionKey);
-        if (!state) return;
-
-        signalCompletion(state, sessionKey, ctx);
-        sessions.delete(sessionKey);
-      });
-
-      // -- Cleanup: clear recording timer on gateway stop ----------------------
-      api.on("gateway_stop", async () => {
-        if (recordingFlushTimer) {
-          clearInterval(recordingFlushTimer);
-          recordingFlushTimer = null;
-        }
-        // Flush all remaining recording buffers
-        for (const [sessionKey] of sessions) {
-          flushRecordingBuffer(sessionKey);
-        }
-      });
-    } // end hooksRegistered guard
+    // -- Cleanup: clear recording timer on gateway stop ----------------------
+    api.on("gateway_stop", async () => {
+      if (recordingFlushTimer) {
+        clearInterval(recordingFlushTimer);
+        recordingFlushTimer = null;
+      }
+      // Flush all remaining recording buffers
+      for (const [sessionKey] of sessions) {
+        flushRecordingBuffer(sessionKey);
+      }
+    });
   },
 };
 
