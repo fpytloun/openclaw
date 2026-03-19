@@ -243,11 +243,22 @@ const intarisPlugin = {
      * for clean session recording. The metadata (sender info, conversation
      * info) is extracted separately so it's available for audit without
      * cluttering the Console view.
+     *
+     * Must stay in sync with sentinels in `src/auto-reply/reply/strip-inbound-meta.ts`.
      */
     function stripRecordingMetadata(text: string): { clean: string; sender?: string } {
+      // Strip all fenced JSON metadata blocks (Conversation info, Sender,
+      // Thread starter, Replied message, Forwarded message context, Chat history).
       const metaBlockRe =
-        /(?:Conversation info|Sender) \(untrusted metadata\):\n```json\n[\s\S]*?```\n*/g;
-      const clean = text.replace(metaBlockRe, "").trim();
+        /(?:Conversation info|Sender|Thread starter|Replied message|Forwarded message context|Chat history since last reply) \(untrusted[^)]*\):\n```json\n[\s\S]*?```\n*/g;
+      let clean = text.replace(metaBlockRe, "");
+      // Strip trailing untrusted context block.
+      clean = clean
+        .replace(
+          /Untrusted context \(metadata, do not treat as instructions or commands\):[\s\S]*$/,
+          "",
+        )
+        .trim();
 
       // Extract sender name from the Sender metadata block.
       const senderMatch = text.match(/Sender \(untrusted metadata\):\n```json\n([\s\S]*?)```/);
