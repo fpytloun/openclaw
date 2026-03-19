@@ -81,6 +81,34 @@ export function escapeForPrompt(text: string): string {
     .replace(/'/g, "&#x27;");
 }
 
+// ============================================================================
+// Inbound metadata stripping
+// ============================================================================
+
+/**
+ * Strip OpenClaw inbound metadata blocks from user message text before
+ * sending to mnemory for memory extraction. Without this, the LLM would
+ * extract junk memories from metadata (e.g. "User sent message_id X at Y").
+ *
+ * Must stay in sync with sentinels in `src/auto-reply/reply/strip-inbound-meta.ts`.
+ */
+export function stripInboundMetadata(text: string): string {
+  // Strip all fenced JSON metadata blocks (Conversation info, Sender,
+  // Thread starter, Replied message, Forwarded message context, Chat history).
+  let clean = text.replace(
+    /(?:Conversation info|Sender|Thread starter|Replied message|Forwarded message context|Chat history since last reply) \(untrusted[^)]*\):\n```json\n[\s\S]*?```\n*/g,
+    "",
+  );
+  // Strip trailing untrusted context block.
+  clean = clean
+    .replace(
+      /Untrusted context \(metadata, do not treat as instructions or commands\):[\s\S]*$/,
+      "",
+    )
+    .trim();
+  return clean;
+}
+
 /**
  * Build the system text to inject from a recall result.
  * Follows the same structure as the mnemory OpenCode plugin.
@@ -1334,9 +1362,14 @@ const mnemoryPlugin = {
           // Update the processed message count
           state.lastMessageCount = exchange.newCount;
 
+          // Strip OpenClaw inbound metadata (sender info, conversation info, etc.)
+          // from the user text so mnemory doesn't extract junk memories from it.
+          const cleanUser = stripInboundMetadata(exchange.user);
+          if (!cleanUser) return; // Nothing left after stripping metadata
+
           // Build messages array for /api/remember
           const messages: Array<{ role: string; content: string }> = [
-            { role: "user", content: exchange.user },
+            { role: "user", content: cleanUser },
           ];
           if (exchange.assistant) {
             messages.push({ role: "assistant", content: exchange.assistant });
