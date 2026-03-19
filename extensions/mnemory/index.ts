@@ -727,6 +727,17 @@ const mnemoryPlugin = {
               labels?: Record<string, unknown>;
             }>;
           };
+          if (memories.length > 5) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Batch size ${memories.length} exceeds limit of 5. Split into smaller batches.`,
+                },
+              ],
+              details: {},
+            };
+          }
           const items: AddMemoriesBatchItem[] = memories.map((m) => ({
             content: m.content,
             memoryType: m.memory_type,

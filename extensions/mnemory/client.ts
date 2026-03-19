@@ -307,13 +307,18 @@ export class MnemoryClient {
     return h;
   }
 
-  private async post<T>(path: string, body: unknown, agentId?: string): Promise<T | null> {
+  private async post<T>(
+    path: string,
+    body: unknown,
+    agentId?: string,
+    timeoutMs?: number,
+  ): Promise<T | null> {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
         method: "POST",
         headers: this.headers(agentId),
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeout),
+        signal: AbortSignal.timeout(timeoutMs ?? this.timeout),
       });
       if (!res.ok) {
         this.logger.warn(`mnemory: POST ${path} returned ${res.status}: ${await res.text()}`);
@@ -537,6 +542,8 @@ export class MnemoryClient {
     memories: AddMemoriesBatchItem[],
     agentId?: string,
   ): Promise<AddMemoriesBatchResponse | null> {
+    // Batch operations can be slow (sequential server-side processing),
+    // so use 5x the normal timeout.
     return this.post<AddMemoriesBatchResponse>(
       "/api/memories/batch",
       {
@@ -554,6 +561,7 @@ export class MnemoryClient {
         })),
       },
       agentId,
+      this.timeout * 5,
     );
   }
 
