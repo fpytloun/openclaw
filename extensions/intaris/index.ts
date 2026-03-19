@@ -140,25 +140,36 @@ function createSessionState(): SessionState {
 /**
  * Build session policy from allowPaths config.
  * Expands ~ to home directory and converts each path to a glob pattern.
+ * Always includes common temp directories so agent temp file operations
+ * don't trigger out-of-project LLM evaluation.
  */
-function buildPolicy(allowPaths: string): Record<string, unknown> | null {
-  if (!allowPaths) return null;
+function buildPolicy(allowPaths: string): Record<string, unknown> {
+  // Default: always allow common temp directories.
+  const defaultPaths = ["/tmp/*", "/var/tmp/*"];
+  // macOS uses $TMPDIR (e.g. /var/folders/xx/yyy/T/) instead of /tmp.
+  const tmpDir = process.env.TMPDIR;
+  if (tmpDir) {
+    defaultPaths.push(`${tmpDir.replace(/\/+$/, "")}/*`);
+  }
+
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  const patterns = allowPaths
-    .split(",")
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((p) => {
-      if (p.startsWith("~/") || p === "~") {
-        p = home + p.slice(1);
-      }
-      if (!p.endsWith("*")) {
-        p = p.endsWith("/") ? p + "*" : p + "/*";
-      }
-      return p;
-    });
-  if (patterns.length === 0) return null;
-  return { allow_paths: patterns };
+  const userPaths = allowPaths
+    ? allowPaths
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .map((p) => {
+          if (p.startsWith("~/") || p === "~") {
+            p = home + p.slice(1);
+          }
+          if (!p.endsWith("*")) {
+            p = p.endsWith("/") ? p + "*" : p + "/*";
+          }
+          return p;
+        })
+    : [];
+
+  return { allow_paths: [...defaultPaths, ...userPaths] };
 }
 
 // ============================================================================
