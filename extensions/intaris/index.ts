@@ -761,11 +761,15 @@ const intarisPlugin = {
       const assistantContext = stateRef.lastAssistantText || undefined;
       stateRef.lastAssistantText = "";
 
-      // Forward user message as reasoning context
+      // Strip inbound metadata (sender/conversation info) from the user
+      // message so it doesn't pollute reasoning context or session recording.
+      const { clean: cleanUserText, sender: userSender } = stripRecordingMetadata(content);
+
+      // Forward clean user message as reasoning context
       client
         .submitReasoning(
           stateRef.intarisSessionId!,
-          `User message: ${content}`,
+          `User message: ${cleanUserText}`,
           ctx.agentId,
           assistantContext,
         )
@@ -776,11 +780,7 @@ const intarisPlugin = {
       // server waits for the /reasoning call to arrive before evaluating.
       stateRef.intentionPending = true;
 
-      // Record user message for session recording.
-      // Strip inbound metadata (sender/conversation info) from the recorded
-      // text so the Console view shows clean messages. The sender is stored
-      // as a separate field for audit visibility.
-      const { clean: cleanUserText, sender: userSender } = stripRecordingMetadata(content);
+      // Record clean user message for session recording.
       recordEvent(sessionKey, {
         type: "message",
         data: {
